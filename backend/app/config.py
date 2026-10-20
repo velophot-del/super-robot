@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     DEBUG_DEMO_MODE: bool = False
     DEBUG_DEMO_DATABASE_URL: str = ""
 
+    # JWT 签名密钥。生产环境必须通过环境变量 SECRET_KEY 提供；
+    # 开发环境留空时会在 backend/data/jwt_secret.key 生成并持久化一个随机密钥。
+    SECRET_KEY: str = ""
+
     # 数据库配置 - 使用SQLite便于开发
     DATABASE_URL: str = "sqlite:///./data/scheduling.db"
 

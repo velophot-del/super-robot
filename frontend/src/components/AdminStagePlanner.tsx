@@ -7,12 +7,13 @@ import { stageLanes,dropWeek } from '../lib/adminStageGrid';
 type DragItem={course_id?:number;task_id?:number;duration?:number};
 const MIME='application/x-college-stage';
 
-export default function AdminStagePlanner({plan,onChange,onEdit}:{plan:any;onChange:()=>Promise<void>;onEdit:(task:any)=>void}){
+export default function AdminStagePlanner({plan,rooms,onChange,onEdit}:{plan:any;rooms:any[];onChange:()=>Promise<void>;onEdit:(task:any)=>void}){
   const [pool,setPool]=useState<any[]>([]),[docId,setDocId]=useState<number>(),[search,setSearch]=useState(''),[groups,setGroups]=useState<string[]>([]);
   const [selected,setSelected]=useState<DragItem>(),[duration,setDuration]=useState<Record<number,number|undefined>>({}),[busy,setBusy]=useState(false),[error,setError]=useState('');
   const pointer=useRef<{item:DragItem;name:string}|null>(null);
   const [ghost,setGhost]=useState<{x:number;y:number;name:string}>();
   const editable=plan.state==='draft';
+  const canSetRoom=plan.state==='open'||plan.state==='matched';
   const groupKey=(plan.groups?.length?plan.groups:[...new Set<string>((plan.tasks||[]).map((t:any)=>t.group))]).join('|');
   useEffect(()=>{setGroups(groupKey?groupKey.split('|'):[]);},[groupKey]);
   const loadPool=useCallback(async()=>{
@@ -73,8 +74,11 @@ export default function AdminStagePlanner({plan,onChange,onEdit}:{plan:any;onCha
               <div data-stage-group={group} style={{height,position:'relative'}} onDragOver={e=>{if(editable&&!busy&&e.dataTransfer.types.includes(MIME)){e.preventDefault();e.dataTransfer.dropEffect='move';}}} onDrop={e=>{e.preventDefault();try{const item=JSON.parse(e.dataTransfer.getData(MIME));const box=e.currentTarget.getBoundingClientRect();place(group,dropWeek(e.clientX,box.left,box.width),item);}catch{message.error('请从课程列表或现有课程块拖入');}}}>
                 {Array.from({length:20},(_,i)=><Button key={i} type="text" aria-label={`放置到 ${group} 第${i+1}周`} disabled={!editable||busy||i>=plan.weeks-1} onClick={()=>place(group,i+1)} style={{position:'absolute',left:`${i*5}%`,width:'5%',height:'100%',borderRadius:0,borderRight:'1px solid #eee',background:i>=plan.weeks-1?'#f3f3f3':selected?'#faf8ff':'white',padding:0,color:'#bbb',fontSize:11}}>{i>=plan.weeks-1?'考试':selected?'+':''}</Button>)}
                 {bars.map(({task,lane})=><div key={task.id} draggable={editable&&!busy} onDragStart={e=>drag(e,{task_id:task.id})} style={{position:'absolute',left:`${(task.start_week-1)*5}%`,width:`${(task.end_week-task.start_week+1)*5}%`,top:lane*130+4,height:122,background:task.slots?.length?'#eee9ff':'#fff4df',border:'1px solid #9e87d9',borderRadius:6,boxSizing:'border-box',padding:7,cursor:editable?'grab':'default',overflow:'auto'}}>
-                  <Button type="text" onClick={()=>onEdit(task)} style={{display:'block',whiteSpace:'normal',height:'auto',padding:0,fontWeight:600,textAlign:'left',width:'100%'}}>{task.name}</Button>
+                  <Button type="text" onClick={()=>{if(editable)onEdit(task);}} style={{display:'block',whiteSpace:'normal',height:'auto',padding:0,fontWeight:600,textAlign:'left',width:'100%'}}>{task.name}</Button>
                   <div style={{fontSize:11,marginTop:4}}>W{task.start_week}—W{task.end_week} · {task.end_week-task.start_week+1}周</div><div style={{fontSize:11}}>{task.credits}学分 · {task.required_hours}学时</div><div style={{fontSize:11}}>{task.slots?.length?'已配节次':'待配节次'} · {task.room_name||'待配地点'}</div>
+                  {canSetRoom&&<Select size="small" aria-label={`设置 ${task.name} ${group} 的上课地点`} style={{width:'100%',marginTop:4}} placeholder="设置上课地点（可选）" allowClear disabled={busy}
+                    value={task.room_id??undefined} onChange={v=>void action(()=>api.setTaskRoom(plan.id,task.id,v??null))}
+                    options={rooms.filter((r:any)=>r.is_available).map((r:any)=>({value:r.id,label:`${r.name} · ${r.capacity}座`}))}/>}
                   {editable&&<Button type="link" size="small" disabled={busy} aria-label={`设置 ${task.name} ${group} 的节次与地点`} onClick={()=>onEdit(task)} style={{padding:0,height:22}}>设置节次与地点</Button>}
                   {editable&&<Popconfirm title="移回待排？保留来源课程记录。" onConfirm={()=>action(()=>api.unplaceCourse(plan.id,task.id,plan.revision))}><Button size="small" type="link" disabled={busy} style={{padding:0,fontSize:11}}>移回待排</Button></Popconfirm>}
                 </div>)}

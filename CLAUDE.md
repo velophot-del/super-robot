@@ -136,4 +136,6 @@ frontend/src/
 - 前端未配置 Vite 代理，依赖后端 CORS 中间件处理跨域
 - `ReportsPage.tsx` 路由已移除（内容整合到 Dashboard），但文件仍存在于目录中
 - 导出端点 `GET /api/io/export/{excel,pdf}` 不需要认证（未添加 `Depends(require_user)`）
-- 分析报告的 `quality_score` 在 `import_export.py` 报告端点中被硬编码为 85.0
+- 生产环境必须通过环境变量 `SECRET_KEY` 提供 JWT 签名密钥；开发环境未配置时会在 `backend/data/jwt_secret.key` 自动生成并持久化随机密钥
+- 排课查询/冲突检测/导出在未传 `version` 时统一使用最新版本（`app/services/schedule_versions.py`），避免混合多个版本
+- `ConstraintRule` 中启用的规则会接管排课引擎对应的检查项；停用的规则会关闭对应内置默认检查

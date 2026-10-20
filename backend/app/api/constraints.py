@@ -1,17 +1,72 @@
 """约束规则管理API"""
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from typing import List
+from typing import Dict, List
 
 from app.database import get_db
 from app.models.constraint import ConstraintRule
+from app.models.schedule import ScheduleEntry
+from app.models.course import Course
+from app.models.teacher import Teacher
+from app.models.class_info import ClassInfo
+from app.models.classroom import Classroom
 from app.schemas.constraint import (
     ConstraintRuleCreate, ConstraintRuleUpdate,
     ConstraintRuleResponse, ConstraintLearningResult
 )
+from app.services.conflict import ConflictDetector
 from app.services.optimization import ConstraintLearningService
 
 router = APIRouter(prefix="/api/constraints", tags=["约束管理"])
+
+
+def _constraint_dict(rule: ConstraintRule) -> dict:
+    return {
+        "id": rule.id,
+        "name": rule.name,
+        "rule_type": rule.rule_type,
+        "category": rule.category,
+        "rule_expression": rule.rule_expression,
+        "weight": rule.weight,
+        "penalty_score": rule.penalty_score,
+        "priority": rule.priority,
+        "is_active": rule.is_active,
+    }
+
+
+def _version_entry_dicts(db: Session, entries: List[ScheduleEntry]) -> List[dict]:
+    """把数据库中的排课条目转换为约束评估所需的完整字典。"""
+    courses = {c.id: c for c in db.query(Course).all()}
+    teachers = {t.id: t for t in db.query(Teacher).all()}
+    classes = {c.id: c for c in db.query(ClassInfo).all()}
+    classrooms = {r.id: r for r in db.query(Classroom).all()}
+
+    result = []
+    for entry in entries:
+        course = courses.get(entry.course_id)
+        teacher = teachers.get(entry.teacher_id)
+        class_info = classes.get(entry.class_id)
+        classroom = classrooms.get(entry.classroom_id)
+        result.append({
+            "id": entry.id,
+            "course_id": entry.course_id,
+            "teacher_id": entry.teacher_id,
+            "class_id": entry.class_id,
+            "classroom_id": entry.classroom_id,
+            "week_number": entry.week_number,
+            "day_of_week": entry.day_of_week,
+            "period_start": entry.period_start,
+            "period_end": entry.period_end,
+            "course_name": course.name if course else "",
+            "teacher_name": teacher.name if teacher else "",
+            "class_name": class_info.name if class_info else "",
+            "classroom_name": classroom.name if classroom else "",
+            "student_count": class_info.student_count if class_info else 0,
+            "room_capacity": classroom.capacity if classroom else 0,
+            "requires_consecutive": course.requires_consecutive if course else False,
+            "preferred_time_slots": teacher.preferred_time_slots if teacher else None,
+        })
+    return result
 
 
 @router.get("/", response_model=List[ConstraintRuleResponse], summary="获取约束规则列表")
@@ -121,25 +176,97 @@ def delete_constraint(rule_id: int, db: Session = Depends(get_db)):
 
 @router.post("/learn", response_model=List[ConstraintLearningResult], summary="执行约束自学习")
 def learn_constraints(db: Session = Depends(get_db)):
-    """基于历史数据执行约束自学习分析"""
+    """基于真实历史排课版本执行约束自学习分析。
+
+    每个历史版本都会按当前启用的约束规则重新评估违反次数，并据此统计满足率、
+    冲突严重度和对方案质量的相关性；没有任何历史版本时不返回虚构数据。
+    """
     constraints = db.query(ConstraintRule).all()
+    if not constraints:
+        return []
+
+    constraint_dicts = [_constraint_dict(rule) for rule in constraints]
+    name_by_id = {rule.id: rule.name for rule in constraints}
 
     learning_service = ConstraintLearningService()
-    historical_data = learning_service.generate_historical_dataset()
-    learning_results = learning_service.learn_from_history(historical_data,
-        [{"id": c.id, "name": c.name, "rule_type": c.rule_type,
-          "category": c.category, "weight": c.weight} for c in constraints])
+
+    versions = [
+        row[0]
+        for row in db.query(ScheduleEntry.schedule_version)
+        .filter(ScheduleEntry.schedule_version.isnot(None))
+        .distinct()
+        .order_by(ScheduleEntry.schedule_version.desc())
+        .all()
+    ]
+
+    history: List[Dict] = []
+    for version in versions:
+        entries = (
+            db.query(ScheduleEntry)
+            .filter(ScheduleEntry.schedule_version == version)
+            .all()
+        )
+        if not entries:
+            continue
+
+        entry_dicts = _version_entry_dicts(db, entries)
+        total = max(1, len(entry_dicts))
+
+        detector = ConflictDetector(entry_dicts)
+        hard_conflicts, soft_conflicts, _stats = detector.detect_all()
+        # 质量代理分：硬冲突权重更高，用于与满足率做相关性分析
+        quality = max(0.0, 100.0 - len(hard_conflicts) * 10.0 - len(soft_conflicts) * 0.5)
+
+        violations = {}
+        satisfaction_rates = {}
+        for rule in constraint_dicts:
+            count = learning_service.count_violations(rule, entry_dicts)
+            violations[str(rule["id"])] = count
+            satisfaction_rates[str(rule["id"])] = max(0.0, 1.0 - count / total)
+
+        history.append({
+            "version": version,
+            "quality_score": quality,
+            "total_entries": total,
+            "hard_violations": len(hard_conflicts),
+            "soft_violations": len(soft_conflicts),
+            "constraints": constraint_dicts,
+            "violations": violations,
+            "constraint_satisfaction_rates": satisfaction_rates,
+        })
+
+    if not history:
+        return []
+
+    learning_service.load_history(history)
+    learning_results = learning_service.learn_from_history(history, constraint_dicts)
 
     results = []
     for impact in learning_results.get("constraint_impacts", []):
+        rule_id = impact.get("rule_id")
+        try:
+            rule_id_int = int(rule_id)
+        except (TypeError, ValueError):
+            rule_id_int = 0
+
         results.append(ConstraintLearningResult(
-            rule_id=impact.get("rule_id", 0) if isinstance(impact.get("rule_id"), int) else 0,
-            rule_name=impact.get("rule_id", ""),
-            satisfaction_rate=1.0 - min(1.0, impact.get("avg_violations", 0) / 20),
-            conflict_count=int(impact.get("avg_violations", 0) * 20),
-            conflict_severity_mean=min(10.0, impact.get("avg_violations", 0) * 2),
-            impact_on_quality=impact.get("impact_on_quality", 0),
+            rule_id=rule_id_int,
+            rule_name=impact.get("rule_name") or name_by_id.get(rule_id_int, str(rule_id or "")),
+            satisfaction_rate=float(impact.get("satisfaction_rate", 0.0)),
+            conflict_count=int(impact.get("conflict_count", impact.get("avg_violations", 0))),
+            conflict_severity_mean=float(impact.get("conflict_severity_mean", 0.0)),
+            impact_on_quality=float(impact.get("impact_on_quality", 0.0)),
             recommendation=impact.get("recommendation", ""),
         ))
+
+    # 把学习结果写回规则，便于列表页展示历史满足率和严重度
+    impacts_by_id = {result.rule_id: result for result in results}
+    for rule in constraints:
+        learned = impacts_by_id.get(rule.id)
+        if learned:
+            rule.satisfaction_rate = learned.satisfaction_rate
+            rule.conflict_severity = learned.conflict_severity_mean
+            rule.learned_from_history = True
+    db.commit()
 
     return results

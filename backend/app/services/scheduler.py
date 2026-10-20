@@ -13,6 +13,8 @@ import json
 import time
 import uuid
 
+from app.utils.departments import split_departments
+
 
 # ========== 数据结构定义 ==========
 
@@ -105,6 +107,10 @@ class SchedulingEngine:
         self.classrooms: Dict[int, Dict] = {}
         self.constraints: List[Dict] = []
         self.existing_schedule: List[Dict] = []
+        # 已配置的约束检查项（含已停用规则）：用于判断是否用配置替代内置默认检查
+        self.known_constraint_checks: Set[str] = set()
+        # 启用中的约束规则及其解析结果
+        self.constraint_rules: List[Dict[str, Any]] = []
 
         # 课程-教师关联映射
         self.course_teacher_map: Dict[int, List[int]] = defaultdict(list)
@@ -128,10 +134,89 @@ class SchedulingEngine:
         self.constraints = constraints or []
         self.existing_schedule = existing_schedule or []
 
+        # 解析约束规则（含停用规则，用于关闭对应的内置默认检查）
+        self._prepare_constraint_rules()
+
         # 构建课程-教师关联：从教师数据中解析可教课程，或基于部门匹配
         self._build_course_teacher_map()
         # 构建课程-班级关联：基于 department 字段匹配
         self._build_course_class_map()
+
+    # ========== 约束规则解析 ==========
+
+    @staticmethod
+    def _parse_rule_expression(rule: Dict) -> Dict[str, Any]:
+        raw = rule.get("rule_expression")
+        if isinstance(raw, dict):
+            return raw
+        if isinstance(raw, str) and raw.strip():
+            try:
+                parsed = json.loads(raw)
+                return parsed if isinstance(parsed, dict) else {}
+            except (json.JSONDecodeError, TypeError):
+                return {}
+        return {}
+
+    @staticmethod
+    def _classify_rule(rule: Dict, expr: Dict[str, Any]) -> Optional[str]:
+        """把一条约束规则映射到内部检查项，无法识别时返回 None。"""
+        rule_type = (expr.get("type") or "").lower()
+        fields = [str(f) for f in (expr.get("fields") or [])]
+        category = (rule.get("category") or "").lower()
+
+        if rule_type == "unique":
+            if "teacher_id" in fields or category == "teacher":
+                return "teacher_unique"
+            if "classroom_id" in fields or category == "classroom":
+                return "classroom_unique"
+            if "class_id" in fields or category == "class":
+                return "class_unique"
+
+        if rule_type == "compare":
+            if (expr.get("field1") == "room_capacity"
+                    or expr.get("field2") in ("student_count", "capacity")
+                    or category == "classroom"):
+                return "capacity"
+
+        if rule_type == "preference":
+            return "teacher_preference"
+        if rule_type == "distribution":
+            return "distribution"
+        if rule_type == "consecutive":
+            return "consecutive"
+        if rule_type == "balance":
+            return "balance"
+
+        # 兼容没有 rule_expression 的旧规则
+        return {
+            "teacher": "teacher_preference",
+            "classroom": "capacity",
+            "class": "class_unique",
+            "time": "distribution",
+            "course": "consecutive",
+        }.get(category)
+
+    def _prepare_constraint_rules(self):
+        self.known_constraint_checks = set()
+        self.constraint_rules = []
+
+        for rule in self.constraints:
+            expr = self._parse_rule_expression(rule)
+            check = self._classify_rule(rule, expr)
+            if not check:
+                continue
+
+            # 停用规则也记录检查项：表示该检查由配置管理且当前关闭，
+            # 从而不再回退到内置默认检查。
+            self.known_constraint_checks.add(check)
+            if not rule.get("is_active", True):
+                continue
+
+            self.constraint_rules.append({
+                "rule": rule,
+                "expr": expr,
+                "check": check,
+            })
 
     def _build_course_teacher_map(self):
         """构建课程-教师关联映射
@@ -147,7 +232,7 @@ class SchedulingEngine:
         self.course_teacher_map.clear()
 
         for course_id, course in self.courses.items():
-            dept = (course.get("department") or "").strip()
+            course_depts = set(split_departments(course.get("department")))
 
             for teacher_id, teacher in self.teachers.items():
                 matched = False
@@ -162,10 +247,10 @@ class SchedulingEngine:
                     except (json.JSONDecodeError, TypeError):
                         pass
 
-                # 规则2：基于部门匹配（同专业教师可教同专业课程）
-                if not matched and dept:
+                # 规则2：基于部门匹配（同专业教师可教同专业/共享课程）
+                if not matched and course_depts:
                     teacher_dept = (teacher.get("department") or "").strip()
-                    if teacher_dept and teacher_dept == dept:
+                    if teacher_dept and teacher_dept in course_depts:
                         matched = True
 
                 if matched and teacher_id not in self.course_teacher_map[course_id]:
@@ -214,8 +299,8 @@ class SchedulingEngine:
         all_class_ids = list(self.classes.keys())
 
         for course_id, course in self.courses.items():
-            course_dept = (course.get("department") or "").strip()
-            if not course_dept:
+            course_depts = set(split_departments(course.get("department")))
+            if not course_depts:
                 # 通用课程，可分配给所有班级
                 self.course_class_map[course_id] = all_class_ids.copy()
                 continue
@@ -223,7 +308,7 @@ class SchedulingEngine:
             eligible = []
             for class_id, cls in self.classes.items():
                 class_dept = (cls.get("department") or "").strip()
-                if not class_dept or class_dept == course_dept:
+                if not class_dept or class_dept in course_depts:
                     eligible.append(class_id)
 
             self.course_class_map[course_id] = eligible  # 不兜底，无匹配班级则留空
@@ -284,6 +369,11 @@ class SchedulingEngine:
             if not eligible_classes:
                 continue
 
+            # 一门课在一个学期内应始终归属同一个教学班和同一位教师，
+            # 否则同一课程会被拆散到多个互不相关的班级/教师。
+            assigned_class = random.choice(eligible_classes)
+            assigned_teacher = random.choice(eligible_teachers)
+
             # 已分配的学期总次数
             total_assigned = 0
             # 为此课程在每个周次中选择时间槽
@@ -319,8 +409,8 @@ class SchedulingEngine:
 
                     assignment = CourseAssignment(
                         course_id=course_id,
-                        teacher_id=random.choice(eligible_teachers),
-                        class_id=random.choice(eligible_classes),
+                        teacher_id=assigned_teacher,
+                        class_id=assigned_class,
                         classroom_id=random.choice(eligible_rooms),
                         time_slot=slot,
                         is_consecutive=is_consecutive,
@@ -337,136 +427,208 @@ class SchedulingEngine:
 
         适应度 = - (硬约束违反数 * 硬惩罚 + 软约束违反加权和)
         适应度越高 = 方案越好 = 违反越少
+
+        数据库中启用中的 ConstraintRule 会接管对应的检查项（冲突、容量、偏好、
+        分布、连排、均衡），并按其 rule_type / weight / penalty_score 计权；
+        被停用的规则会关闭对应的内置默认检查，而不是悄悄回退到默认行为。
         """
         hard_violations = 0
+        hard_penalty_sum = 0.0
         soft_violations = 0
         soft_penalty_sum = 0.0
+        hard_penalty = self.config["hard_penalty"]
 
-        # === 硬约束检查 ===
+        def add_hard(count: int, severity: float = 1.0):
+            nonlocal hard_violations, hard_penalty_sum
+            if count <= 0:
+                return
+            hard_violations += count
+            hard_penalty_sum += count * hard_penalty * severity
 
-        # 1. 同一教师同一周同一时间不能有两门课
+        def add_soft(count: int, penalty: float):
+            nonlocal soft_violations, soft_penalty_sum
+            if count <= 0:
+                return
+            soft_violations += count
+            soft_penalty_sum += penalty
+
+        # === 预计算占用/分布指标（按周分组，避免跨周累加） ===
         teacher_slot_map: Dict[Tuple[int, int, int, int], int] = defaultdict(int)
-        for a in schedule.assignments:
-            key = (a.teacher_id, a.week_number, a.time_slot.day, a.time_slot.period)
-            teacher_slot_map[key] += 1
-            # 连排也要检查下一节
-            if a.is_consecutive:
-                key2 = (a.teacher_id, a.week_number, a.time_slot.day, a.time_slot.period + 1)
-                teacher_slot_map[key2] += 1
-
-        hard_violations += sum(max(0, v - 1) for v in teacher_slot_map.values())
-
-        # 2. 同一教室同一周同一时间不能有两门课
         room_slot_map: Dict[Tuple[int, int, int, int], int] = defaultdict(int)
-        for a in schedule.assignments:
-            key = (a.classroom_id, a.week_number, a.time_slot.day, a.time_slot.period)
-            room_slot_map[key] += 1
-            if a.is_consecutive:
-                key2 = (a.classroom_id, a.week_number, a.time_slot.day, a.time_slot.period + 1)
-                room_slot_map[key2] += 1
-
-        hard_violations += sum(max(0, v - 1) for v in room_slot_map.values())
-
-        # 3. 同一班级同一周同一时间不能有两门课
         class_slot_map: Dict[Tuple[int, int, int, int], int] = defaultdict(int)
+        teacher_weekly_hours: Dict[Tuple[int, int], int] = defaultdict(int)
+        course_day_map: Dict[Tuple[int, int, int], int] = defaultdict(int)
+        class_day_hours: Dict[Tuple[int, int, int], int] = defaultdict(int)
+        room_day_usage: Dict[Tuple[int, int, int], int] = defaultdict(int)
+
         for a in schedule.assignments:
-            key = (a.class_id, a.week_number, a.time_slot.day, a.time_slot.period)
-            class_slot_map[key] += 1
+            periods = [a.time_slot.period]
             if a.is_consecutive:
-                key2 = (a.class_id, a.week_number, a.time_slot.day, a.time_slot.period + 1)
-                class_slot_map[key2] += 1
+                periods.append(a.time_slot.period + 1)
+            for period in periods:
+                teacher_slot_map[(a.teacher_id, a.week_number, a.time_slot.day, period)] += 1
+                room_slot_map[(a.classroom_id, a.week_number, a.time_slot.day, period)] += 1
+                class_slot_map[(a.class_id, a.week_number, a.time_slot.day, period)] += 1
 
-        hard_violations += sum(max(0, v - 1) for v in class_slot_map.values())
+            teacher_weekly_hours[(a.teacher_id, a.week_number)] += 2 if a.is_consecutive else 1
+            course_day_map[(a.course_id, a.week_number, a.time_slot.day)] += 2 if a.is_consecutive else 1
+            class_day_hours[(a.class_id, a.week_number, a.time_slot.day)] += 2 if a.is_consecutive else 1
+            room_day_usage[(a.classroom_id, a.week_number, a.time_slot.day)] += 1
 
-        # 4. 教室容量检查（硬约束：不能超员）
+        teacher_duplicates = sum(max(0, v - 1) for v in teacher_slot_map.values())
+        room_duplicates = sum(max(0, v - 1) for v in room_slot_map.values())
+        class_duplicates = sum(max(0, v - 1) for v in class_slot_map.values())
+
+        capacity_strict = 0
+        capacity_tolerant = 0
+        department_mismatches = 0
+        unavailable_violations = 0
+        preference_violations = 0
+
         for a in schedule.assignments:
             classroom = self.classrooms.get(a.classroom_id, {})
             class_info = self.classes.get(a.class_id, {})
-            if classroom.get("capacity") and class_info.get("student_count"):
-                if class_info["student_count"] > classroom["capacity"] * 1.2:
-                    hard_violations += 1
+            capacity = classroom.get("capacity") or 0
+            students = class_info.get("student_count") or 0
+            if capacity > 0 and students > capacity:
+                capacity_strict += 1
+            if capacity > 0 and students > capacity * 1.2:
+                capacity_tolerant += 1
 
-        # 5. 教师每周课时上限（按周检查，取最大周课时）
-        teacher_weekly_hours: Dict[Tuple[int, int], int] = defaultdict(int)
-        for a in schedule.assignments:
-            key = (a.teacher_id, a.week_number)
-            teacher_weekly_hours[key] += 2 if a.is_consecutive else 1
-        # 统计每位教师跨所有周的最大课时
-        teacher_max_weekly: Dict[int, int] = defaultdict(int)
-        for (t_id, week), hours in teacher_weekly_hours.items():
-            teacher_max_weekly[t_id] = max(teacher_max_weekly[t_id], hours)
-        for t_id, max_hours in teacher_max_weekly.items():
-            limit = self.teachers.get(t_id, {}).get("max_weekly_hours", 20)
-            if limit and max_hours > limit:
-                hard_violations += (max_hours - limit)
-
-        # 6. 课程-班级部门匹配检查（硬约束：课程必须分配到匹配专业的班级）
-        for a in schedule.assignments:
             eligible = self.course_class_map.get(a.course_id, [])
             if eligible and a.class_id not in eligible:
-                hard_violations += 5  # 部门不匹配视为较严重违规
+                department_mismatches += 1
 
-        # === 软约束检查 ===
-
-        # 1. 教师时间偏好
-        for a in schedule.assignments:
             teacher = self.teachers.get(a.teacher_id, {})
-            preferred = teacher.get("preferred_time_slots")
-            if preferred:
-                try:
-                    pref_slots = json.loads(preferred) if isinstance(preferred, str) else preferred
-                    slot_key = f"{a.time_slot.day}-{a.time_slot.period}"
-                    if slot_key not in pref_slots and pref_slots:
-                        soft_violations += 1
-                        soft_penalty_sum += self.config["weight_teacher_preference"] * 0.5
-                except (json.JSONDecodeError, TypeError):
-                    pass
-
-            # 2. 检查教师不可用时间
             unavailable = teacher.get("unavailable_slots")
             if unavailable:
                 try:
                     unavail = json.loads(unavailable) if isinstance(unavailable, str) else unavailable
-                    slot_key = f"{a.time_slot.day}-{a.time_slot.period}"
-                    if slot_key in unavail:
-                        hard_violations += 3  # 教师不可用时间算作严重违规
+                    if f"{a.time_slot.day}-{a.time_slot.period}" in unavail:
+                        unavailable_violations += 1
                 except (json.JSONDecodeError, TypeError):
                     pass
 
-        # 3. 课程时间分布（避免同一天同周过多集中）
-        course_day_map: Dict[Tuple[int, int, int], int] = defaultdict(int)
-        for a in schedule.assignments:
-            course_day_map[(a.course_id, a.week_number, a.time_slot.day)] += 1
-        for (c_id, week, day), count in course_day_map.items():
-            if count > 2:  # 同一门课同一天同周超过2节
-                soft_violations += (count - 2)
-                soft_penalty_sum += self.config["weight_time_distribution"] * (count - 2)
+            preferred = teacher.get("preferred_time_slots")
+            if preferred:
+                try:
+                    pref_slots = json.loads(preferred) if isinstance(preferred, str) else preferred
+                    if pref_slots and f"{a.time_slot.day}-{a.time_slot.period}" not in pref_slots:
+                        preference_violations += 1
+                except (json.JSONDecodeError, TypeError):
+                    pass
 
-        # 4. 班级每日课时均衡（按周计算）
-        class_day_hours: Dict[Tuple[int, int, int], int] = defaultdict(int)
-        for a in schedule.assignments:
-            class_day_hours[(a.class_id, a.week_number, a.time_slot.day)] += 2 if a.is_consecutive else 1
-        for c_id in self.classes:
-            for week in range(1, 21):  # 最多 20 周
-                day_hours = [class_day_hours.get((c_id, week, d), 0) for d in range(1, 6)]
-                if day_hours and max(day_hours) > 0:
-                    variance = np.var(day_hours) if len(day_hours) > 1 else 0
-                    soft_penalty_sum += variance * self.config["weight_time_distribution"] * 0.5
+        # 每门课每周每天的课时分布（超过 max_per_day 的部分）
+        distribution_excess = sum(max(0, hours - 2) for hours in course_day_map.values())
 
-        # 5. 教室利用率均衡（按周统计）
-        room_day_usage: Dict[Tuple[int, int, int], int] = defaultdict(int)
-        for a in schedule.assignments:
-            room_day_usage[(a.classroom_id, a.week_number, a.time_slot.day)] += 1
+        # 每个班级每周的每日课时均衡度（超过 4 课时差距的部分）
+        weekdays = self.config.get("weekdays", 5)
+        class_week_hours: Dict[Tuple[int, int], List[int]] = {}
+        for (class_id, week, day), hours in class_day_hours.items():
+            class_week_hours.setdefault((class_id, week), [0] * weekdays)[day - 1] += hours
+        balance_excess = sum(
+            max(0, max(hours) - min(hours) - 4)
+            for hours in class_week_hours.values()
+            if any(hours)
+        )
+
+        # === 内置硬约束（未被配置规则接管的部分） ===
+        for check, count in (
+            ("teacher_unique", teacher_duplicates),
+            ("classroom_unique", room_duplicates),
+            ("class_unique", class_duplicates),
+        ):
+            if check not in self.known_constraint_checks:
+                add_hard(count)
+
+        if "capacity" not in self.known_constraint_checks:
+            # 默认保留 20% 容忍度；配置了容量规则时由规则执行严格比较
+            add_hard(capacity_tolerant)
+
+        # 教师每周课时上限
+        teacher_max_weekly: Dict[int, int] = defaultdict(int)
+        for (t_id, _week), hours in teacher_weekly_hours.items():
+            teacher_max_weekly[t_id] = max(teacher_max_weekly[t_id], hours)
+        for t_id, max_hours in teacher_max_weekly.items():
+            limit = self.teachers.get(t_id, {}).get("max_weekly_hours", 20)
+            if limit and max_hours > limit:
+                add_hard(max_hours - limit)
+
+        # 课程-班级部门匹配、教师不可用时间始终是硬约束
+        add_hard(department_mismatches)
+        add_hard(unavailable_violations, severity=3.0)
+
+        # === 内置软约束（未被配置规则接管的部分） ===
+        if "teacher_preference" not in self.known_constraint_checks:
+            add_soft(preference_violations,
+                     preference_violations * self.config["weight_teacher_preference"] * 0.5)
+
+        if "distribution" not in self.known_constraint_checks:
+            add_soft(distribution_excess,
+                     distribution_excess * self.config["weight_time_distribution"])
+
+        if "balance" not in self.known_constraint_checks:
+            add_soft(balance_excess,
+                     balance_excess * self.config["weight_time_distribution"] * 0.5)
+
+        # 教室利用率均衡（内置目标，暂不支持规则配置）
         for r_id in self.classrooms:
             for week in range(1, 21):
-                day_usage = [room_day_usage.get((r_id, week, d), 0) for d in range(1, 6)]
+                day_usage = [room_day_usage.get((r_id, week, d), 0) for d in range(1, weekdays + 1)]
                 if day_usage and max(day_usage) > 0:
                     variance = np.var(day_usage) if len(day_usage) > 1 else 0
                     soft_penalty_sum += variance * self.config["weight_room_utilization"] * 0.3
 
+        # === 应用配置的约束规则（含停用规则对内置检查的接管） ===
+        check_counts = {
+            "teacher_unique": teacher_duplicates,
+            "classroom_unique": room_duplicates,
+            "class_unique": class_duplicates,
+            "capacity": capacity_strict,
+            "teacher_preference": preference_violations,
+            "consecutive": 0,
+        }
+
+        for item in self.constraint_rules:
+            check = item["check"]
+            expr = item["expr"]
+            rule = item["rule"]
+
+            if check == "distribution":
+                limit = int(expr.get("max_per_day", 2) or 2)
+                count = sum(max(0, hours - limit) for hours in course_day_map.values())
+            elif check == "balance":
+                threshold = int(expr.get("max_diff", 4) or 4)
+                count = sum(
+                    max(0, max(hours) - min(hours) - threshold)
+                    for hours in class_week_hours.values()
+                    if any(hours)
+                )
+            elif check == "consecutive":
+                count = sum(
+                    1 for a in schedule.assignments
+                    if self.courses.get(a.course_id, {}).get("requires_consecutive")
+                    and not a.is_consecutive
+                )
+            else:
+                count = check_counts.get(check, 0)
+
+            if count <= 0:
+                continue
+
+            rule_type = (rule.get("rule_type") or "soft").lower()
+            weight = float(rule.get("weight") if rule.get("weight") is not None else 1.0)
+            penalty = float(rule.get("penalty_score")
+                            if rule.get("penalty_score") is not None else 10.0)
+
+            if rule_type == "hard":
+                add_hard(count, severity=max(0.1, weight / 5.0))
+            else:
+                add_soft(count, count * max(0.1, weight) * max(0.1, penalty) / 10.0)
+
         # 计算总适应度（越高越好）
-        total_penalty = (hard_violations * self.config["hard_penalty"] +
-                        soft_penalty_sum * self.config["soft_penalty_multiplier"])
+        total_penalty = (hard_penalty_sum +
+                         soft_penalty_sum * self.config["soft_penalty_multiplier"])
 
         schedule.hard_violations = hard_violations
         schedule.soft_violations = soft_violations
@@ -520,8 +682,12 @@ class SchedulingEngine:
 
                 if mutation_type == "teacher":
                     eligible = self.course_teacher_map.get(assignment.course_id, [])
-                    if eligible:
-                        assignment.teacher_id = random.choice(eligible)
+                    if eligible and len(eligible) > 1:
+                        # 同一门课的所有周次保持同一位教师
+                        new_teacher = random.choice(eligible)
+                        for other in schedule.assignments:
+                            if other.course_id == assignment.course_id:
+                                other.teacher_id = new_teacher
 
                 elif mutation_type == "classroom":
                     course = self.courses.get(assignment.course_id, {})
@@ -540,7 +706,11 @@ class SchedulingEngine:
                         current = assignment.class_id
                         others = [c for c in eligible if c != current]
                         if others:
-                            assignment.class_id = random.choice(others)
+                            # 同一门课的所有周次保持同一个教学班
+                            new_class = random.choice(others)
+                            for other in schedule.assignments:
+                                if other.course_id == assignment.course_id:
+                                    other.class_id = new_class
 
                 elif mutation_type == "timeslot":
                     days = list(range(1, self.config.get("weekdays", 5) + 1))

@@ -151,58 +151,63 @@ class ConflictDetector:
                     })
 
     def _detect_time_distribution_conflicts(self):
-        """检测课程时间分布合理性问题"""
-        # 按课程统计每天课时
-        course_day_count: Dict[Tuple[int, int], int] = defaultdict(int)
-        course_day_entries: Dict[Tuple[int, int], List[int]] = defaultdict(list)
+        """检测课程时间分布合理性问题（按周分组统计）"""
+        # 按「课程 + 周次 + 星期」统计课时，避免把多周课时累加到同一天
+        course_day_count: Dict[Tuple[int, int, int], int] = defaultdict(int)
+        course_day_entries: Dict[Tuple[int, int, int], List[int]] = defaultdict(list)
 
         for entry in self.entries:
             course_id = entry.get("course_id")
+            week = entry.get("week_number", 1)
             day = entry.get("day_of_week")
             hours = (entry.get("period_end", entry.get("period_start"))
                     - entry.get("period_start", 1) + 1)
-            course_day_count[(course_id, day)] += hours
-            course_day_entries[(course_id, day)].append(entry.get("id", 0))
+            course_day_count[(course_id, week, day)] += hours
+            course_day_entries[(course_id, week, day)].append(entry.get("id", 0))
 
-        # 检测同一天同一课程过于集中
-        for (course_id, day), total_hours in course_day_count.items():
+        # 检测同一周同一天同一课程过于集中
+        for (course_id, week, day), total_hours in course_day_count.items():
             if total_hours > 3:
                 self.soft_conflicts.append({
                     "conflict_type": "soft",
                     "category": "time",
-                    "description": (f"课程(ID:{course_id}) 在周{day}共有{total_hours}课时，"
+                    "description": (f"课程(ID:{course_id}) 在第{week}周 周{day}共有{total_hours}课时，"
                                    f"分布可能过于集中，建议分散安排"),
                     "severity": 4.0,
-                    "entries_involved": course_day_entries[(course_id, day)],
+                    "entries_involved": course_day_entries[(course_id, week, day)],
                     "resolution_suggestion": "将该课程的部分课时调整到其他天"
                 })
 
-        # 检测班级每天课时均衡性
-        class_day_hours: Dict[Tuple[int, int], int] = defaultdict(int)
+        # 按「班级 + 周次」统计每日课时均衡性
+        class_day_hours: Dict[Tuple[int, int, int], int] = defaultdict(int)
+        class_day_entries: Dict[Tuple[int, int, int], List[int]] = defaultdict(list)
         for entry in self.entries:
             class_id = entry.get("class_id")
+            week = entry.get("week_number", 1)
             day = entry.get("day_of_week")
             hours = (entry.get("period_end", entry.get("period_start"))
                     - entry.get("period_start", 1) + 1)
-            class_day_hours[(class_id, day)] += hours
+            class_day_hours[(class_id, week, day)] += hours
+            class_day_entries[(class_id, week, day)].append(entry.get("id", 0))
 
-        # 按班级检查
-        class_ids = set(e.get("class_id") for e in self.entries)
-        for class_id in class_ids:
-            day_hours = {d: class_day_hours.get((class_id, d), 0) for d in range(1, 6)}
-            if day_hours:
-                max_h = max(day_hours.values())
-                min_h = min(day_hours.values())
-                if max_h - min_h > 4:
-                    self.soft_conflicts.append({
-                        "conflict_type": "soft",
-                        "category": "time",
-                        "description": (f"班级(ID:{class_id})每日课时分布不均: "
-                                       f"最多{max_h}课时, 最少{min_h}课时，差距达{max_h - min_h}课时"),
-                        "severity": 5.0,
-                        "entries_involved": [],
-                        "resolution_suggestion": "重新分配课程时间，使每日课时更均衡"
-                    })
+        class_weeks = sorted({(class_id, week) for class_id, week, _day in class_day_hours})
+        for class_id, week in class_weeks:
+            day_hours = {d: class_day_hours.get((class_id, week, d), 0) for d in range(1, 6)}
+            max_h = max(day_hours.values())
+            min_h = min(day_hours.values())
+            if max_h - min_h > 4:
+                involved = []
+                for day in day_hours:
+                    involved.extend(class_day_entries.get((class_id, week, day), []))
+                self.soft_conflicts.append({
+                    "conflict_type": "soft",
+                    "category": "time",
+                    "description": (f"班级(ID:{class_id})在第{week}周每日课时分布不均: "
+                                   f"最多{max_h}课时, 最少{min_h}课时，差距达{max_h - min_h}课时"),
+                    "severity": 5.0,
+                    "entries_involved": sorted(set(involved)),
+                    "resolution_suggestion": "重新分配课程时间，使每日课时更均衡"
+                })
 
     def _detect_consecutive_requirement_conflicts(self):
         """检测连排要求是否满足"""

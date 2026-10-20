@@ -68,6 +68,11 @@ class TaskInput(BaseModel):
         return self
 
 
+class RoomInput(BaseModel):
+    """开放填报后单独设置/清除上课地点。"""
+    room_id: int | None = None
+
+
 class ProfileInput(BaseModel):
     direction: str = ''
     tags: list[str] = Field(default_factory=list)

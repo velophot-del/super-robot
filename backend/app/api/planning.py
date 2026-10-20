@@ -12,7 +12,7 @@ from app.models.teacher import Teacher
 from app.models.classroom import Classroom
 from app.models.planning import (AcademicPlan, TeachingTask, PeriodSlot, TeacherProfile,
     PreferenceDraft, PreferenceSubmission, MatchRun, TeachingAssignment, PlanningEvent, PublishedPlan)
-from app.schemas.planning import PlanInput, TaskInput, ProfileInput, DraftInput, SubmitInput, AssignmentInput, SelfProfileInput
+from app.schemas.planning import PlanInput, TaskInput, RoomInput, ProfileInput, DraftInput, SubmitInput, AssignmentInput, SelfProfileInput
 from app.services.auth import require_user
 from app.services.authorization import can, check
 from app.services.stage_planning import task_dict, validate_tasks, capacity
@@ -245,6 +245,37 @@ def update_task(plan_id:int,task_id:int,data:TaskInput,user=Depends(require_user
         return task_dict(db,task)
 
 
+@router.put('/plans/{plan_id}/tasks/{task_id}/room')
+def set_task_room(plan_id:int,task_id:int,data:RoomInput,user=Depends(require_user),db:Session=Depends(get_db)):
+    """开放填报后单独设置或清除上课地点。
+
+    地点不属于志愿匹配的输入，因此不递增 plan.revision，避免已提交意愿失效。
+    """
+    check(user,'admin')
+    with write(db):
+        plan=get_plan(db,plan_id)
+        if plan.state not in {'open','matched'}:
+            raise HTTPException(409,'仅开放填报或匹配阶段可以单独调整地点')
+        task=db.get(TeachingTask,task_id)
+        if not task or task.plan_id!=plan.id:raise HTTPException(404,'任务不存在')
+        if not task.payload.get('start_week'):raise HTTPException(409,'任务尚未配置周段')
+
+        if data.room_id is not None:
+            room=db.get(Classroom,data.room_id)
+            if not room:raise HTTPException(404,'地点不存在')
+            if not room.is_available:raise HTTPException(409,'地点已停用')
+            if room.capacity < task.payload.get('student_count',0):raise HTTPException(409,'地点容量不足')
+            if task.payload.get('room_type') and task.payload['room_type']!=room.room_type:
+                raise HTTPException(409,'地点类型不符合课程要求')
+
+        task.payload={**task.payload,'room_id':data.room_id}
+        # SessionLocal 关闭了 autoflush，必须显式 flush 才能让校验读到新地点
+        db.flush()
+        validate_tasks(db,plan,[t for t in tasks_for(db,plan) if t.get('start_week')])
+        event(db,user,'set_room',{'task_id':task_id,'room_id':data.room_id},plan.id)
+        return task_dict(db,task)
+
+
 @router.post('/plans/{plan_id}/open')
 def open_plan(plan_id: int,user=Depends(require_user),db: Session=Depends(get_db)):
     check(user,'admin')
@@ -252,7 +283,7 @@ def open_plan(plan_id: int,user=Depends(require_user),db: Session=Depends(get_db
         plan=get_plan(db,plan_id); tasks=[t for t in tasks_for(db,plan) if t.get('start_week')]
         if plan.state!='draft' or not tasks: raise HTTPException(409,'只有包含完整任务的草稿可以开放')
         if plan.deadline<=datetime.now(timezone.utc).replace(tzinfo=None): raise HTTPException(409,'申报截止时间已过')
-        if any(not task.get('room_id') for task in tasks):raise HTTPException(409,'请在开放填报前落实全部上课地点')
+        # 上课地点不强制在开放填报前落实：可在开放/匹配阶段通过 set_task_room 设置，发布前仍会校验
         validate_tasks(db,plan,tasks);plan.state='open';event(db,user,'open',{},plan.id)
         return plan_info(plan)
 

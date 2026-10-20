@@ -18,6 +18,8 @@ from app.services.validation import ValidationService
 from app.services.export_service import ExportService
 from app.services.conflict import ConflictDetector
 from app.services.explanation import ExplanationGenerator
+from app.services.schedule_versions import resolve_schedule_version
+from app.utils.departments import merge_department
 
 router = APIRouter(prefix="/api/io", tags=["导入导出"])
 
@@ -108,7 +110,8 @@ async def import_csv(entity_type: str, file: UploadFile = File(...), db: Session
 
 @router.get("/export/excel", summary="导出Excel课表")
 def export_excel(version: str = Query(None), db: Session = Depends(get_db)):
-    """导出排课方案为Excel文件"""
+    """导出排课方案为Excel文件（未指定版本时导出最新版本）"""
+    version = resolve_schedule_version(db, version)
     query = db.query(ScheduleEntry)
     if version:
         query = query.filter(ScheduleEntry.schedule_version == version)
@@ -160,7 +163,8 @@ def export_excel(version: str = Query(None), db: Session = Depends(get_db)):
 @router.get("/export/pdf", summary="导出PDF课表")
 def export_pdf(version: str = Query(None), view_type: str = Query("class"),
                db: Session = Depends(get_db)):
-    """导出排课方案为PDF格式"""
+    """导出排课方案为PDF格式（未指定版本时导出最新版本）"""
+    version = resolve_schedule_version(db, version)
     query = db.query(ScheduleEntry)
     if version:
         query = query.filter(ScheduleEntry.schedule_version == version)
@@ -207,7 +211,8 @@ def export_pdf(version: str = Query(None), view_type: str = Query("class"),
 
 @router.get("/report", summary="生成智能分析报告")
 def generate_report(version: str = Query(None), db: Session = Depends(get_db)):
-    """生成排课方案的智能分析报告"""
+    """生成排课方案的智能分析报告（未指定版本时使用最新版本）"""
+    version = resolve_schedule_version(db, version)
     query = db.query(ScheduleEntry)
     if version:
         query = query.filter(ScheduleEntry.schedule_version == version)
@@ -233,18 +238,22 @@ def generate_report(version: str = Query(None), db: Session = Depends(get_db)):
             "classroom_name": room.name if room else "",
             "student_count": cls.student_count if cls else 0,
             "room_capacity": room.capacity if room else 0,
+            "requires_consecutive": course.requires_consecutive if course else False,
+            "preferred_time_slots": teacher.preferred_time_slots if teacher else None,
         })
 
     # 冲突检测
     detector = ConflictDetector(entry_dicts)
     hard, soft, stats = detector.detect_all()
 
+    quality_score = max(0.0, 100.0 - len(hard) * 10.0 - len(soft) * 0.5)
+
     # AI解释
     explainer = ExplanationGenerator()
     schedule_result = {
         "version": version or entries[0].schedule_version,
         "total_entries": len(entries),
-        "quality_score": 85.0,
+        "quality_score": round(quality_score, 1),
         "hard_conflicts": len(hard),
         "soft_conflicts": len(soft),
         "execution_time": 0,
@@ -342,8 +351,10 @@ def _import_syllabus(data_rows: list, db: Session) -> dict:
                 existing_course.weekly_sessions = weekly_sessions
                 existing_course.hours_per_session = hours_per_session
                 existing_course.course_type = course_type
+                # 共享课程可能被多个专业使用：合并专业归属，而不是用最后一行覆盖
                 if department:
-                    existing_course.department = department
+                    existing_course.department = merge_department(
+                        existing_course.department, department)
                 if total_hours is not None:
                     existing_course.total_hours = total_hours
                 if credits is not None:

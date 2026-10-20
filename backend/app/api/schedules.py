@@ -22,6 +22,7 @@ from app.services.conflict import ConflictDetector
 from app.services.explanation import ExplanationGenerator
 from app.services.optimization import ConstraintLearningService
 from app.services.export_service import ExportService
+from app.services.schedule_versions import resolve_schedule_version
 
 router = APIRouter(prefix="/api/schedules", tags=["排课管理"])
 
@@ -72,7 +73,8 @@ def generate_schedule(request: ScheduleRequest, db: Session = Depends(get_db)):
     teachers = teachers_query.all()
 
     classrooms = db.query(Classroom).all()
-    constraints = db.query(ConstraintRule).filter(ConstraintRule.is_active == True).all()
+    # 传入全部规则：启用规则参与优化，停用规则用于关闭对应的内置默认检查
+    constraints = db.query(ConstraintRule).all()
 
     if not courses or not teachers or not classes or not classrooms:
         raise HTTPException(status_code=400, detail="请先完善基础数据（课程、教师、班级、教室）")
@@ -147,24 +149,48 @@ def generate_schedule(request: ScheduleRequest, db: Session = Depends(get_db)):
     if not result["success"]:
         raise HTTPException(status_code=500, detail=result.get("error", "排课失败"))
 
-    # 冲突检测
+    # 冲突检测：排课引擎返回的条目需要补齐容量、连排、教师偏好等字段，
+    # 否则容量/连排/偏好类冲突会被冲突检测器静默跳过。
+    classes_by_id = {c["id"]: c for c in class_dicts}
+    rooms_by_id = {r["id"]: r for r in classroom_dicts}
+    courses_by_id = {c["id"]: c for c in course_dicts}
+    teachers_by_id = {t["id"]: t for t in teacher_dicts}
+
+    for index, entry in enumerate(result["entries"], start=1):
+        class_info = classes_by_id.get(entry["class_id"], {})
+        room = rooms_by_id.get(entry["classroom_id"], {})
+        course = courses_by_id.get(entry["course_id"], {})
+        teacher = teachers_by_id.get(entry["teacher_id"], {})
+
+        entry["id"] = index
+        entry["student_count"] = class_info.get("student_count", 0)
+        entry["room_capacity"] = room.get("capacity", 0)
+        entry["requires_consecutive"] = course.get("requires_consecutive", False)
+        entry["preferred_time_slots"] = teacher.get("preferred_time_slots")
+
     detector = ConflictDetector(result["entries"])
     hard_conflicts, soft_conflicts, stats = detector.detect_all()
 
-    # 约束学习
+    # 以冲突检测器的结果作为对外的冲突统计，保证与 /conflicts 端点一致
+    result["hard_conflicts"] = len(hard_conflicts)
+    result["soft_conflicts"] = len(soft_conflicts)
+
+    # 约束满足分析（只分析启用中的规则；不再使用虚构历史数据）
     learning_service = ConstraintLearningService()
-    learning_service.load_history([])
+    active_constraint_dicts = [c for c in constraint_dicts if c.get("is_active", True)]
     constraint_satisfaction = learning_service.analyze_constraint_satisfaction(
-        constraint_dicts, result["entries"]
+        active_constraint_dicts, result["entries"]
     )
-    historical_dataset = learning_service.generate_historical_dataset()
-    learning_data = learning_service.learn_from_history(historical_dataset, constraint_dicts)
+    learning_data = {
+        "constraint_impacts": constraint_satisfaction,
+        "summary": "以下满足率基于本次生成的方案与当前启用的约束规则计算。",
+    }
 
     # 生成AI解释
     explainer = ExplanationGenerator()
     explanation = explainer.generate(
         result,
-        constraint_stats={"constraint_impacts": constraint_satisfaction, "summary": learning_data.get("summary", "")},
+        constraint_stats={"constraint_impacts": constraint_satisfaction, "summary": learning_data["summary"]},
         conflicts={"hard_conflicts": hard_conflicts, "soft_conflicts": soft_conflicts, "conflict_stats": stats},
         learning_data=learning_data,
     )
@@ -237,10 +263,15 @@ def list_schedules(
     day_of_week: int = Query(None, ge=1, le=7),
     db: Session = Depends(get_db),
 ):
-    """获取排课结果，支持多维度筛选"""
-    query = db.query(ScheduleEntry)
-    if version:
-        query = query.filter(ScheduleEntry.schedule_version == version)
+    """获取排课结果，支持多维度筛选。
+
+    未指定 version 时只返回最新版本，避免多个版本的条目相互叠加。
+    """
+    version = resolve_schedule_version(db, version)
+    if not version:
+        return []
+
+    query = db.query(ScheduleEntry).filter(ScheduleEntry.schedule_version == version)
     if class_id:
         query = query.filter(ScheduleEntry.class_id == class_id)
     if teacher_id:
@@ -328,7 +359,8 @@ def delete_schedule_version(version: str, db: Session = Depends(get_db)):
 
 @router.get("/conflicts", response_model=List[ConflictInfo], summary="检测冲突")
 def detect_conflicts(version: str = Query(None), db: Session = Depends(get_db)):
-    """对当前排课方案进行冲突检测"""
+    """对当前排课方案进行冲突检测（未指定版本时使用最新版本）"""
+    version = resolve_schedule_version(db, version)
     query = db.query(ScheduleEntry)
     if version:
         query = query.filter(ScheduleEntry.schedule_version == version)
@@ -367,7 +399,8 @@ def detect_conflicts(version: str = Query(None), db: Session = Depends(get_db)):
 
 @router.get("/explanation", summary="获取AI优化说明")
 def get_explanation(version: str = Query(None), db: Session = Depends(get_db)):
-    """获取排课方案的AI优化说明"""
+    """获取排课方案的AI优化说明（未指定版本时使用最新版本）"""
+    version = resolve_schedule_version(db, version)
     query = db.query(ScheduleEntry)
     if version:
         query = query.filter(ScheduleEntry.schedule_version == version)
@@ -378,18 +411,32 @@ def get_explanation(version: str = Query(None), db: Session = Depends(get_db)):
 
     entry_dicts = [_enrich_entry(e, db) for e in entries]
 
-    result = {
-        "version": version or entries[0].schedule_version,
-        "total_entries": len(entries),
-        "quality_score": 85.0,
-        "hard_conflicts": 0,
-        "soft_conflicts": 0,
-        "execution_time": 0,
-        "entries": entry_dicts,
-    }
+    # 补齐冲突检测需要的字段（容量、学生人数、连排要求、教师偏好）
+    for entry in entry_dicts:
+        classroom = db.query(Classroom).filter(Classroom.id == entry["classroom_id"]).first()
+        class_info = db.query(ClassInfo).filter(ClassInfo.id == entry["class_id"]).first()
+        course = db.query(Course).filter(Course.id == entry["course_id"]).first()
+        teacher = db.query(Teacher).filter(Teacher.id == entry["teacher_id"]).first()
+        entry["room_capacity"] = classroom.capacity if classroom else 0
+        entry["student_count"] = class_info.student_count if class_info else 0
+        entry["requires_consecutive"] = course.requires_consecutive if course else False
+        entry["preferred_time_slots"] = teacher.preferred_time_slots if teacher else None
 
     detector = ConflictDetector(entry_dicts)
     hard, soft, stats = detector.detect_all()
+
+    # 由实际冲突估算质量分，避免硬编码固定分数
+    quality_score = max(0.0, 100.0 - len(hard) * 10.0 - len(soft) * 0.5)
+
+    result = {
+        "version": version or entries[0].schedule_version,
+        "total_entries": len(entries),
+        "quality_score": round(quality_score, 1),
+        "hard_conflicts": len(hard),
+        "soft_conflicts": len(soft),
+        "execution_time": 0,
+        "entries": entry_dicts,
+    }
 
     explainer = ExplanationGenerator()
     explanation = explainer.generate(result, conflicts={

@@ -184,6 +184,26 @@ class ExportService:
             worksheet.column_dimensions[get_column_letter(col_idx)].width = 22
 
     @staticmethod
+    def _pdf_font_name() -> str:
+        """注册并返回支持中文的 PDF 字体。
+
+        reportlab 内置的 CID 字体 STSong-Light 无需额外字体文件即可渲染中文；
+        注册失败时退回 Helvetica（至少不阻断导出）。
+        """
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+
+        font_name = "STSong-Light"
+        try:
+            pdfmetrics.getFont(font_name)
+        except Exception:
+            try:
+                pdfmetrics.registerFont(UnicodeCIDFont(font_name))
+            except Exception:
+                return "Helvetica"
+        return font_name
+
+    @staticmethod
     def export_to_pdf(schedule_entries: List[Dict], metadata: Dict = None,
                       view_type: str = "class") -> bytes:
         """导出排课方案到PDF格式
@@ -202,8 +222,6 @@ class ExportService:
         from reportlab.lib.units import mm
         from reportlab.platypus import (SimpleDocTemplate, Table, TableStyle,
                                         Paragraph, Spacer, PageBreak)
-        from reportlab.pdfbase import pdfmetrics
-        from reportlab.pdfbase.ttfonts import TTFont
 
         output = io.BytesIO()
 
@@ -212,9 +230,15 @@ class ExportService:
                                rightMargin=15*mm, leftMargin=15*mm,
                                topMargin=15*mm, bottomMargin=15*mm)
 
+        font_name = ExportService._pdf_font_name()
         styles = getSampleStyleSheet()
         title_style = ParagraphStyle('CustomTitle', parent=styles['Heading1'],
+                                     fontName=font_name,
                                      fontSize=16, spaceAfter=12, alignment=1)
+        body_style = ParagraphStyle('CustomBody', parent=styles['Normal'],
+                                    fontName=font_name, fontSize=9)
+        group_style = ParagraphStyle('CustomGroup', parent=styles['Heading3'],
+                                     fontName=font_name, fontSize=12, spaceBefore=6)
 
         elements = []
 
@@ -228,7 +252,7 @@ class ExportService:
             meta_text = (f"版本: {metadata.get('version', '')} | "
                         f"质量评分: {metadata.get('quality_score', 0)}分 | "
                         f"冲突: 硬{metadata.get('hard_conflicts', 0)}/软{metadata.get('soft_conflicts', 0)}")
-            elements.append(Paragraph(meta_text, styles['Normal']))
+            elements.append(Paragraph(meta_text, body_style))
             elements.append(Spacer(1, 5*mm))
 
         # 按视图分组
@@ -245,8 +269,8 @@ class ExportService:
         day_names = {1: "周一", 2: "周二", 3: "周三", 4: "周四", 5: "周五"}
 
         for group_name, group_entries in sorted(groups.items()):
-            # 分组标题
-            elements.append(Paragraph(f"<b>{group_name}</b>", styles['Heading3']))
+            # 分组标题（使用中文字体，避免 <b> 触发未注册的粗体字体）
+            elements.append(Paragraph(group_name, group_style))
 
             # 构建表格
             table_data = [["节次"] + [day_names.get(d, f"") for d in range(1, 6)]]
@@ -269,6 +293,7 @@ class ExportService:
             col_widths = [50] + [130] * 5
             table = Table(table_data, colWidths=col_widths, repeatRows=1)
             table.setStyle(TableStyle([
+                ('FONTNAME', (0, 0), (-1, -1), font_name),
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4472C4')),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
                 ('FONTSIZE', (0, 0), (-1, 0), 9),

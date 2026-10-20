@@ -1,6 +1,7 @@
 from fastapi import HTTPException
 from app.models.course import Course
 from app.models.planning import CurriculumCourse,CurriculumDocument,ActiveCurriculum
+from app.utils.departments import merge_department
 
 
 def sync_courses(db,doc):
@@ -16,7 +17,11 @@ def sync_courses(db,doc):
                 department=doc.major,course_type=category or '必修',semester_sessions=1,weekly_sessions=1,hours_per_session=1,
                 remarks=row.get('notes',''))
             db.add(existing);db.flush();added+=1
-        else:reused+=1
+        else:
+            # 同一课程编码可能被多个专业共享；合并专业归属，避免后启用的专业覆盖先前的专业
+            merged=merge_department(existing.department,doc.major)
+            if merged!=existing.department:existing.department=merged
+            reused+=1
         link=db.query(CurriculumCourse).filter_by(document_id=doc.id,row_code=row['code']).first()
         if not link:db.add(CurriculumCourse(document_id=doc.id,row_code=row['code'],course_id=existing.id,metadata_json=row))
     db.flush()

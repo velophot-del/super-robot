@@ -18,6 +18,7 @@ export const planningApi = {
   saveProfile: (id: number, data: unknown) => api.put(`/planning/profiles/${id}`, data),
   addTask: (id: number, data: unknown) => api.post(`/planning/plans/${id}/tasks`, data),
   editTask: (id: number, taskId: number, data: unknown) => api.put(`/planning/plans/${id}/tasks/${taskId}`, data),
+  setTaskRoom: (id: number, taskId: number, roomId: number | null) => api.put(`/planning/plans/${id}/tasks/${taskId}/room`, { room_id: roomId }),
   generate: (id: number) => api.post(`/planning/plans/${id}/generate`),
   curricula: () => api.get('/planning/curricula'),
   importCurriculum: (data: FormData) => api.post('/planning/curricula/import',data,{headers:{'Content-Type':'multipart/form-data'}}),

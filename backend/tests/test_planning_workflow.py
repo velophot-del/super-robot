@@ -108,10 +108,23 @@ class PlanningWorkflowTests(unittest.IsolatedAsyncioTestCase):
         workbook=load_workbook(BytesIO(r.content))
         self.assertEqual(workbook.active.cell(2,1).value,'Typography')
 
-    async def test_open_requires_room_before_freezing_task(self):
+    async def test_open_does_not_require_room_and_room_can_be_set_later(self):
         pid=await self.plan();admin=await self.headers()
         payload=self.task();payload['room_id']=None
-        self.assertEqual((await self.client.post(f'/api/planning/plans/{pid}/tasks',headers=admin,json=payload)).status_code,200)
+        created=await self.client.post(f'/api/planning/plans/{pid}/tasks',headers=admin,json=payload)
+        self.assertEqual(created.status_code,200,created.text)
+        task_id=created.json()['id']
+
         response=await self.client.post(f'/api/planning/plans/{pid}/open',headers=admin)
-        self.assertEqual(response.status_code,409,response.text)
-        self.assertIn('地点',response.text)
+        self.assertEqual(response.status_code,200,response.text)
+
+        assigned=await self.client.put(
+            f'/api/planning/plans/{pid}/tasks/{task_id}/room',headers=admin,json={'room_id':31})
+        self.assertEqual(assigned.status_code,200,assigned.text)
+        self.assertEqual(assigned.json()['room_id'],31)
+        self.assertEqual(assigned.json()['room_name'],'Room')
+
+        cleared=await self.client.put(
+            f'/api/planning/plans/{pid}/tasks/{task_id}/room',headers=admin,json={'room_id':None})
+        self.assertEqual(cleared.status_code,200,cleared.text)
+        self.assertIsNone(cleared.json()['room_id'])

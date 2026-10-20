@@ -20,7 +20,12 @@ ALIASES={
 }
 
 
-def extract_rows(filename,content):
+def extract_rows(filename,content,scope=''):
+    """解析课程表格。
+
+    `scope` 用于生成系统内部课程编码。它必须标识培养方案（专业/届次/修订号），
+    否则不同专业中相同的表号、行号和课程名会生成相同编码并互相冲突。
+    """
     if len(content)>10*1024*1024:raise HTTPException(413,'文件超过10MiB')
     suffix=filename.lower().rsplit('.',1)[-1]
     tables=[]
@@ -72,7 +77,7 @@ def extract_rows(filename,content):
                 record['source_table']=table_no;record['source_row']=line_no
                 record['code_generated']=not bool(record['code'])
                 if record['code_generated']:
-                    identity=f"{table_no}:{line_no}:{record['name']}:{record['semester']}"
+                    identity=f"{scope}:{table_no}:{line_no}:{record['name']}:{record['semester']}"
                     record['code']='SYS-'+hashlib.sha256(identity.encode()).hexdigest()[:16].upper()
                 record['tags']=[s.strip() for s in record['tags'].replace('，',',').split(',') if s.strip()]
                 for key in ['weekly_hours','teaching_weeks']:

@@ -29,10 +29,12 @@ def curricula(user=Depends(require_user),db:Session=Depends(get_db)):
 async def import_curriculum(major:str=Form(...),cohort:str=Form(...),revision:int=Form(...),
         file:UploadFile=File(...),user=Depends(require_user),db:Session=Depends(get_db)):
     check(user,'admin')
+    major=major.strip();cohort=cohort.strip()
+    if not major or not cohort or revision<1:raise HTTPException(422,'专业、届次和修订号必填')
     content=await file.read(10*1024*1024+1)
-    rows,errors=extract_rows(file.filename or '',content)
+    # scope 参与系统内部课程编码生成，确保不同专业/届次/修订号的同名课程不会碰撞
+    rows,errors=extract_rows(file.filename or '',content,f'{major}|{cohort}|{revision}')
     if errors:raise HTTPException(422,'；'.join(errors[:20]))
-    if not major.strip() or not cohort.strip() or revision<1:raise HTTPException(422,'专业、届次和修订号必填')
     with write(db):
         if db.query(CurriculumDocument).filter_by(major=major,cohort=cohort,revision=revision).first():raise HTTPException(409,'该专业届次修订号已存在，原件不会覆盖')
         doc=CurriculumDocument(name=(file.filename or 'source')[:200],major=major.strip(),cohort=cohort.strip(),revision=revision,
