@@ -1,218 +1,173 @@
 # AI 驱动的一体化智能排课平台
 
-基于**改进遗传算法**的多目标优化智能排课系统。前后端分离架构，支持课程、教师、班级、教室的全生命周期管理，自动生成满足硬约束、优化软约束的高质量课表方案。
+面向学院分阶段授课管理的排课项目，采用 FastAPI + React 前后端分离架构。当前主流程为：**培养方案导入 → 管理员安排课程周段、节次与地点 → 教师填报意愿 → 教师匹配 → 人工审核 → 发布与导出**。
 
----
+项目同时保留遗传算法排课、历史课表及冲突分析模块。新版教师匹配采用评分与硬约束校验，需管理员审核，不代表遗传算法全局最优求解。当前为本地可运行版本，尚未完成真实学院数据、生产并发和部署验收。
 
-## ✨ 核心功能
+## 当前功能
 
-| 模块 | 功能 |
-|------|------|
-| 🔐 用户认证 | JWT 注册/登录，Token 24h 过期，受保护路由 |
-| 📊 工作台 | 班级/教师/课程/教室实时统计 + 排课版本历史 |
-| 📋 数据管理 | 班级、教师、课程、教室 CRUD + CSV 批量导入/教学大纲导入 |
-| ⚙️ 约束配置 | 硬约束/软约束规则管理，支持历史数据学习优化权重 |
-| 🧬 AI 排课 | 遗传算法多目标优化，支持选择排课范围、配置种群参数 |
-| 📅 课表视图 | 甘特图课表，按班级/教师/教室三维度展示，支持拖拽调整 |
-| ⚠️ 冲突检测 | 硬/软冲突自动检测，生成解决建议 |
-| 📥 导入导出 | CSV 模板下载/导入，课表导出 Excel/PDF |
+| 模块 | 已实现内容 |
+| --- | --- |
+| 基础数据 | 班级、教师、课程、教室维护及 CSV 导入 |
+| 培养方案 | CSV/XLSX/DOCX 导入、预览、版本激活；保留原始字段、源文件和哈希 |
+| 课程库同步 | 生效方案同步标准课程库，重复同步不重复新增；共享课程保留多个专业归属 |
+| 管理员阶段排课 | 班级为纵轴、周次为横轴，拖放课程安排起始周和持续周数；通过“设置节次与地点”配置正常节次、尾段节次及教室 |
+| 教师个人资料 | 本人维护专业方向、领域、擅长课程；与管理员核实的团队、曾授课程和容量记录区分来源 |
+| 教师选课 | 按学年、学期、专业浏览阶段总表，跨专业预选、草稿排序与保存；各管理员周期独立提交 |
+| 匹配与审核 | 候选评分、容量及时间冲突校验、人工分配和审核理由；资料版本变化后重新匹配 |
+| 发布与归档 | 发布前硬约束检查；提交记录、匹配批次、来源材料、审计与发布快照不可变 |
+| 课表导出 | 新流程发布快照导出 XLSX、学院模板 Word；旧课表支持 Excel/PDF 导出 |
+| 旧版排课 | 遗传算法生成、版本管理、班级/教师/教室筛选、冲突检测与历史约束分析 |
+| 访问控制 | JWT 登录；按 AccountGrant 功能与范围授权，教师身份通过 TeacherBinding 绑定 |
 
----
+### 新流程的业务规则
 
-## 🛠 技术栈
+- 教师必须完善专业方向、领域和擅长课程，才能保存预选或提交；前后端均检查。
+- 开放填报前，管理员必须落实课程周段、精确授课学时和有效地点。教师意愿不占据名额，也不修改学院预设时段。
+- 同一教学组每周最多两门课、每天最多一门；保留节次不计入授课学时。20 周周期中第 1—19 周授课，第 20 周用于考试。
+- 按学年筛选、分学期浏览；仍以管理员创建的周期分别保存和提交，不合并为全年一次申报。每周期最多五项、至少 `min(3, 任务数)` 项。
+- 匹配综合分满分 105：方向 20、领域 15、团队 40、曾授 15、志愿 10/7/5/3/1、容量 5。擅长课程命中独立展示，同综合分时优先；高分不能豁免硬约束。
+- 培养方案无正式课程代码时使用标明的 `SYS-` 内部编号。缺学期、零学时、占位及同名同学期重复记录保留待核查，不自动排入。
 
-| 层 | 技术 |
-|---|------|
-| 后端框架 | FastAPI 0.104 + Uvicorn |
-| ORM | SQLAlchemy 2.0（自动建表） |
-| 数据库 | SQLite（`backend/data/scheduling.db`） |
-| 排课引擎 | 遗传算法 — NumPy + scikit-learn |
-| 认证 | JWT（python-jose）+ PBKDF2 密码哈希 |
-| 前端框架 | React 19 + TypeScript 6.0 |
-| 构建工具 | Vite 8.1 |
-| UI 组件库 | Ant Design 6.4（中文 locale） |
-| 图表 | Recharts 3.9 |
-| 拖拽 | @dnd-kit |
-| 设计系统 | Stripe 风格紫色主题（`#533afd`） |
+详细流程与范围见 [PLANNING_WORKFLOW.md](PLANNING_WORKFLOW.md)。
 
----
+### 最新修正
 
-## 🚀 快速开始
+- 旧版课表查询、冲突检测及导出未指定版本时统一取最新版本，避免混合多个历史方案。
+- 冲突统计按周处理，避免将不同周的课时累加为同一天超载；生成结果补齐容量等冲突检查字段。
+- 遗传算法接入启用的约束配置与权重；同一课程的班级、教师分配保持一致。
+- 历史约束分析改为读取实际保存的排课版本，无历史时返回空结果，不生成虚构学习数据。
+- 共享课程合并专业归属，自动生成的内部课程代码区分培养方案范围。
+- JWT 密钥支持环境变量配置；`DEBUG=false` 时必须提供密钥；仅开发模式未配置时尝试在 `backend/data/jwt_secret.key` 持久化随机密钥。
 
-### 环境要求
+以上描述对应当前工作区，包含尚未提交到 Git 的代码改动。
 
-- **Python** 3.10+
-- **Node.js** 18+
-- **npm** 9+
+## 技术与环境
 
-### 1. 克隆项目
+| 层级 | 技术 |
+| --- | --- |
+| 后端 | Python、FastAPI、SQLAlchemy、Pydantic、Uvicorn |
+| 数据库 | SQLite，默认 `backend/data/scheduling.db` |
+| 算法与分析 | NumPy、scikit-learn；旧版遗传算法与新版教师评分匹配 |
+| 前端 | React 19、TypeScript 6、Vite 8、Ant Design 6、Recharts、@dnd-kit |
+| 文件处理 | openpyxl、ReportLab；学院 Word 模板保存在后端模板目录 |
+
+本机已使用 Python 3.12 和 Node.js 25。前端测试依赖 Node 原生 TypeScript stripping，建议使用相同环境；旧自述中的 Node.js 18 不适用于当前工具链。具体依赖见 [backend/requirements.txt](backend/requirements.txt) 与 [frontend/package.json](frontend/package.json)。
+
+## 本地启动
+
+### 获取项目与准备环境
 
 ```bash
-git clone https://github.com/lafeighb/AI-driven-intelligent-scheduling-platform.git
-cd AI-driven-intelligent-scheduling-platform
+git clone https://github.com/velophot-del/super-robot.git
+cd super-robot
 ```
 
-### 2. 启动后端
+首次安装时：
 
 ```bash
 cd backend
-pip install -r requirements.txt
-python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
 ```
 
-后端运行在 `http://localhost:8000`，首次启动自动创建 SQLite 数据库并建表。
-
-API 文档：`http://localhost:8000/docs`
-
-### 3. 启动前端
+在另一个终端进入项目的 `frontend` 目录：
 
 ```bash
-cd frontend
-npm install
-npm run dev
+npm ci
 ```
 
-前端运行在 `http://localhost:5173`，通过 CORS 直接请求后端。
+已有 `backend/.venv` 和 `frontend/node_modules` 时可直接启动，无需重复安装。
 
-### 4. 开始使用
+### 启动服务
 
-1. 打开 `http://localhost:5173`，注册账号并登录
-2. 在「数据管理」中录入班级、教师、课程、教室
-3. 在「约束配置」中设置排课规则
-4. 进入「AI 智能排课」选择范围 → 配置参数 → 执行排课
-5. 在「课表视图」中查看生成的课表方案
+在 `backend` 目录运行。先在当前终端设置密钥；本地临时运行可生成随机值（重开终端后需重新设置，令牌随密钥更换而失效）。正式使用应通过环境变量提供固定的私密值：
 
----
-
-## 📐 排课引擎
-
-### 算法架构
-
-```
-遗传算法 (GA)
-├── 种群初始化 → 随机生成排课方案
-├── 适应度评估 → 硬约束惩罚 + 软约束加权
-├── 选择 → 锦标赛选择
-├── 交叉 → 基于课程分组的均匀交叉
-├── 变异 → 教师/教室/时间槽/班级/交换 五种策略
-└── 早停 → 连续 N 代无改进且硬冲突为0时终止
+```bash
+export SECRET_KEY="$(.venv/bin/python -c 'import secrets; print(secrets.token_urlsafe(48))')"
 ```
 
-### 约束体系
-
-**硬约束（必须满足）：**
-- 同一教师同一时间不能有两门课
-- 同一教室同一时间不能有两门课
-- 同一班级同一时间不能有两门课
-- 教室容量不能超过上限的 120%
-- 教师每周课时不超过上限
-- 课程只能分配给匹配专业的班级
-- 教师不可用时间段不能排课
-
-**软约束（尽量满足）：**
-- 教师时间偏好
-- 课程时间分布均衡
-- 班级每日课时均衡
-- 教室利用率均衡
-
-### 教师-课程匹配
-
-排课前严格校验教师-课程匹配关系：
-- 教师 `courses_can_teach` 明确列出课程 → 匹配
-- 教师与课程 `department` 相同 → 匹配
-- 以上都不满足 → **排课中断，提示用户分配教师**
-
----
-
-## 📁 项目结构
-
-```
-├── backend/                    # FastAPI 后端
-│   ├── app/
-│   │   ├── main.py             # 应用入口，路由注册
-│   │   ├── config.py           # 配置管理
-│   │   ├── database.py         # 数据库引擎 + 会话
-│   │   ├── models/             # ORM 模型
-│   │   │   ├── user.py         # 用户
-│   │   │   ├── class_info.py   # 班级
-│   │   │   ├── teacher.py      # 教师
-│   │   │   ├── course.py       # 课程
-│   │   │   ├── classroom.py    # 教室
-│   │   │   ├── schedule.py     # 排课条目
-│   │   │   └── constraint.py   # 约束规则
-│   │   ├── schemas/            # Pydantic 请求/响应模型
-│   │   ├── api/                # API 路由
-│   │   │   ├── auth.py         # 认证
-│   │   │   ├── schedules.py    # 排课管理
-│   │   │   └── import_export.py # 导入导出
-│   │   ├── services/           # 业务逻辑
-│   │   │   ├── scheduler.py    # 遗传算法排课引擎
-│   │   │   ├── conflict.py     # 冲突检测器
-│   │   │   ├── optimization.py # 约束学习服务
-│   │   │   ├── explanation.py  # AI 优化说明生成
-│   │   │   ├── export_service.py # Excel/PDF 导出
-│   │   │   ├── validation.py   # 数据校验
-│   │   │   └── auth.py         # JWT + 密码哈希
-│   │   └── utils/
-│   │       └── csv_parser.py   # CSV 解析器
-│   ├── data/                   # SQLite 数据库文件
-│   └── requirements.txt
-│
-├── frontend/                   # React 前端
-│   ├── src/
-│   │   ├── main.tsx            # 入口
-│   │   ├── App.tsx             # 路由配置
-│   │   ├── theme.ts            # Ant Design 主题
-│   │   ├── api/
-│   │   │   └── client.ts       # Axios + API 函数 + JWT 拦截器
-│   │   ├── contexts/
-│   │   │   └── AuthContext.tsx  # 认证状态管理
-│   │   ├── components/
-│   │   │   ├── AppLayout.tsx   # 应用布局
-│   │   │   └── DataTable.tsx   # 通用表格组件
-│   │   ├── pages/
-│   │   │   ├── Login.tsx       # 登录
-│   │   │   ├── Register.tsx    # 注册
-│   │   │   ├── Dashboard.tsx   # 工作台
-│   │   │   ├── TimetableView.tsx # 甘特图课表
-│   │   │   ├── ExportPage.tsx  # 课表导出
-│   │   │   ├── DataManagement/ # 数据管理（班级/教师/课程/教室/导入）
-│   │   │   └── Scheduling/     # 排课管理（约束配置/引擎/冲突检测）
-│   │   └── types/
-│   │       └── index.ts        # TypeScript 类型定义
-│   └── package.json
-│
-└── README.md
+```bash
+DEBUG=false .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
----
+在 `frontend` 目录运行：
 
-## 🔗 API 概览
+```bash
+npm run dev -- --host 127.0.0.1 --port 5173 --strictPort
+```
 
-| 方法 | 端点 | 说明 |
-|------|------|------|
-| POST | `/api/auth/register` | 用户注册 |
-| POST | `/api/auth/login` | 用户登录 |
-| GET | `/api/auth/me` | 获取当前用户 |
-| GET/POST/PUT/DELETE | `/api/classes/` | 班级 CRUD |
-| GET/POST/PUT/DELETE | `/api/teachers/` | 教师 CRUD |
-| GET/POST/PUT/DELETE | `/api/courses/` | 课程 CRUD |
-| GET/POST/PUT/DELETE | `/api/classrooms/` | 教室 CRUD |
-| POST | `/api/schedules/generate` | AI 自动排课 |
-| GET | `/api/schedules/` | 获取排课结果 |
-| GET | `/api/schedules/versions` | 版本历史 |
-| GET | `/api/schedules/conflicts` | 冲突检测 |
-| GET | `/api/io/template/{type}` | 下载 CSV 模板 |
-| POST | `/api/io/csv/{type}` | CSV 批量导入 |
-| GET | `/api/io/export/{excel,pdf}` | 导出课表 |
-| GET | `/api/io/report` | 分析报告 |
+浏览器访问 `http://localhost:5173`。前端 API 默认请求 `http://localhost:8000`；使用 `localhost` 页面地址以匹配当前后端 CORS 设置。服务仅绑定本机回环地址。
 
----
+- API 文档：`http://localhost:8000/docs`
+- 健康检查：`http://localhost:8000/api/health`
+- 启动自动创建数据库表；默认数据库位置相对于 `backend` 工作目录。
+- 执行后端命令时显式设置 `DEBUG=false`，避免宿主环境中的同名变量导致配置解析失败。
 
-## 📄 License
+### 登录与授权
 
-MIT License
+注册账号后不会自动获得管理或教学权限，也不按旧角色标签自动提权。真实账号需要管理员明确授予功能和范围；教学功能还需绑定教师。
 
----
+以下命令在已设置 `SECRET_KEY` 的后端终端执行，替换实际 ID，仅预览、不写入：
 
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
+```bash
+DEBUG=false .venv/bin/python -m app.access_cli --user-id 1 --capability teaching --scope self --teacher-id 1
+```
+
+核对账号、教师与范围后添加 `--apply` 才会写入。支持的功能包括 `admin`、`teaching`、`lead`、`review`、`publish`，详见 [backend/app/access_cli.py](backend/app/access_cli.py)。
+
+### 隔离演示
+
+免登录身份切换入口为 `/debug`，默认关闭。启用时必须使用专用演示数据库，并同时设置相同的 `DATABASE_URL` 与 `DEBUG_DEMO_DATABASE_URL`，另设 `DEBUG_DEMO_MODE=true`。演示操作会修改演示库；不得连接正式数据库。
+
+完整命令、虚构数据准备和身份切换说明见 [DEBUG.md](DEBUG.md)。文档中的临时数据库路径是本机示例，新克隆项目不包含该数据库。
+
+## 检查命令
+
+在 `backend` 目录：
+
+```bash
+SECRET_KEY=local-test-only-do-not-use-in-production DEBUG=false PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m unittest discover -s tests -v
+```
+
+在 `frontend` 目录：
+
+```bash
+npm test
+npm run build
+npm run lint
+```
+
+后端测试使用内存 SQLite，不使用现有演示数据库作为测试夹具。前端测试使用 Node 内置测试工具。检查结果应以当前运行输出为准；历史测试通过不代表当前代码或生产环境已验收。
+
+## 主要目录
+
+```text
+backend/
+  app/
+    api/                 # 认证、培养方案、阶段排课、旧版排课和导出接口
+    models/              # 基础数据、授权、教学任务及不可变记录
+    schemas/             # 请求和响应模型
+    services/            # 阶段安排、匹配、校验、遗传算法和导出
+    templates/           # 学院 Word 课表模板
+    access_cli.py        # 真实账号显式授权工具
+  scripts/               # 隔离演示数据准备
+  tests/                 # 后端回归及流程测试
+frontend/
+  src/
+    pages/               # 管理工作台、教师资料、选课和历史课表
+    components/          # 阶段排课与教师总课表等组件
+    lib/                 # 授权与课表网格工具
+    api/                 # API 调用及令牌管理
+  tests/                 # Node 原生测试
+```
+
+## 当前限制
+
+- 多教师共同分配尚无按分段、分组、协作模式的独立分工和学时核算。
+- 教师直接调课、开放计划修订/解锁、退回重报与通知尚未实现。
+- 节假日、调休及周末校历尚未接入；真实学生名单完整性需管理员保障。
+- 真实账号授权目前通过 CLI，尚无后台授权界面；跨资源统一导入预览与提交事务仍待完善。
+- 培养方案 DOCX 适配现有学院版式，不代表支持任意院校格式或扫描件 OCR。
+- 学院 Word 导出复用模板并从发布快照生成；尚未完成桌面 Word 逐页视觉验收，不能保证像素级一致。
+- 尚未完成真实业务数据、生产并发及部署验收；自动排课结果仍需核查，不能将算法得分视为全局最优或零冲突证明。
