@@ -1,0 +1,7 @@
+Implemented approved teacher profile + academic-year selection scope.
+
+Backend25 tests PASS; frontend8 tests PASS; tsc/Vite build PASS; lint exit0 with7 existing warnings. Independent readonly review ran backend suite and found no Critical/Important defects. No new dependency or production deploy.
+
+Browser: admin→teacher incomplete profile redirects /planning→/profile; teacher1 saved mandatory declarations (administrator records preserved); /planning loaded Word-like stage table; cross-major demo checkbox saved; major filter restricted correctly; year2027–2028 displayed published read-only tasks; returning2026–2027 retained both independent drafts; fictional illustration cycle submitted successfully (record2) while original design draft stayed unchanged/unsubmitted. Existing demoDB backed up before profile edits. Teacher2 remains incomplete for onboarding demo.
+
+Files: services/personal_profile.py, api/planning.py, schemas/planning.py, teacher_course_matching.py; frontend TeacherProfilePage,TeacherSelectionPage,StageSelectionTable,selectionGrid and routing/menu/API bindings. Docs AGENTS/DEBUG/PLANNING_WORKFLOW updated. Personal profession/courses declared separately from admin-verified team/history/capacity. Shared revision guards old forms and matching. Scope stays separate per administrator academic-semester/major/cohort cycle; no annual unified submission or cross-cycle vote merger.
