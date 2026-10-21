@@ -8,7 +8,8 @@ def can(user, action: str, resource: dict | None = None) -> bool:
             continue
         if grant['scope'] == 'all':
             return True
-        if grant['scope'] == 'self' and resource.get('teacher_id') == getattr(user, 'teacher_id', None):
+        if (grant['scope'] == 'self' and getattr(user, 'teacher_id', None) is not None
+                and resource.get('teacher_id') == user.teacher_id):
             return True
         if grant['scope'] == 'dept' and str(resource.get('department')) == grant.get('scope_id'):
             return True

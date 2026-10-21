@@ -3,6 +3,7 @@ import json
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from typing import List
 import io
 from urllib.parse import quote
@@ -69,7 +70,7 @@ async def import_csv(entity_type: str, file: UploadFile = File(...), db: Session
     if validation_result["invalid"] > 0:
         return {
             "success": False,
-            "imported": validation_result["valid"],
+            "imported": 0,
             "errors": [e["message"] for e in validation_result["errors"]],
             "warnings": [w["message"] for w in validation_result["warnings"]],
             "summary": validation_result["summary"],
@@ -86,9 +87,36 @@ async def import_csv(entity_type: str, file: UploadFile = File(...), db: Session
     if not model_class:
         raise HTTPException(status_code=400, detail=f"未知实体类型: {entity_type}")
 
+    # 按文件顺序保留首条可导入记录，重复行不覆盖数据库或占用新值。
+    labels = {"name": "名称", "teacher_code": "教师工号",
+              "course_code": "课程编码", "room_code": "教室编号"}
+    unique_columns = [column for column in model_class.__table__.columns if column.unique]
+    seen = {column.name: {} for column in unique_columns}
+    pending_rows = []
+    skipped_reasons = []
+    for row_number, row in enumerate(data_rows, start=2):
+        reasons = []
+        for column in unique_columns:
+            value = row.get(column.name)
+            if value is None:
+                continue
+            label = labels.get(column.name, column.name)
+            previous = seen[column.name].get(value)
+            if previous is not None:
+                reasons.append(f"{label}“{value}”与本文件第{previous}行重复")
+            elif db.query(model_class.id).filter(getattr(model_class, column.name) == value).first():
+                reasons.append(f"{label}“{value}”已存在")
+        if reasons:
+            skipped_reasons.append(f"第{row_number}行已跳过：{'；'.join(reasons)}")
+            continue
+        pending_rows.append(row)
+        for column in unique_columns:
+            if row.get(column.name) is not None:
+                seen[column.name][row[column.name]] = row_number
+
     imported_count = 0
     import_errors = []
-    for row in data_rows:
+    for row in pending_rows:
         try:
             obj = model_class(**row)
             db.add(obj)
@@ -96,15 +124,20 @@ async def import_csv(entity_type: str, file: UploadFile = File(...), db: Session
         except Exception as e:
             import_errors.append(str(e))
 
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="导入数据存在名称、编号或必填字段冲突，本次未写入；请核对文件并刷新现有数据后重试，无需删除排课记录")
 
     return {
         "success": len(import_errors) == 0,
         "imported": imported_count,
+        "skipped": len(skipped_reasons),
         "total": len(data_rows),
         "errors": import_errors + [e["message"] for e in parse_errors if isinstance(e, dict)],
-        "warnings": [w["message"] for w in validation_result.get("warnings", [])],
-        "summary": f"成功导入{imported_count}条记录" + (f"，{len(import_errors)}条失败" if import_errors else ""),
+        "warnings": skipped_reasons + [w["message"] for w in validation_result.get("warnings", [])],
+        "summary": f"成功导入{imported_count}条记录，跳过{len(skipped_reasons)}条重复记录（已有数据未覆盖）" + (f"，{len(import_errors)}条失败" if import_errors else ""),
     }
 
 

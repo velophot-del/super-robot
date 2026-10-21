@@ -171,6 +171,10 @@ def generate_schedule(request: ScheduleRequest, db: Session = Depends(get_db)):
     detector = ConflictDetector(result["entries"])
     hard_conflicts, soft_conflicts, stats = detector.detect_all()
 
+    # 引擎还检查教师不可用时段等规则，独立检测不能覆盖其硬冲突结果。
+    if result.get("hard_conflicts", 0) or hard_conflicts:
+        raise HTTPException(status_code=409, detail="排课方案存在硬约束冲突，未保存；请调整资源或约束后重试")
+
     # 以冲突检测器的结果作为对外的冲突统计，保证与 /conflicts 端点一致
     result["hard_conflicts"] = len(hard_conflicts)
     result["soft_conflicts"] = len(soft_conflicts)
@@ -328,6 +332,16 @@ def update_schedule_entry(entry_id: int, data: ScheduleEntryUpdate, db: Session 
         raise HTTPException(status_code=404, detail="排课条目不存在")
 
     update_data = data.model_dump(exclude_unset=True)
+    if any(value is None for value in update_data.values()):
+        raise HTTPException(status_code=422, detail="调课字段不能为 null；不修改的字段请省略")
+    start = update_data.get("period_start", entry.period_start)
+    end = update_data.get("period_end", entry.period_end)
+    if start > end:
+        raise HTTPException(status_code=422, detail="开始节次不能晚于结束节次")
+    for field, model, label in (("teacher_id", Teacher, "教师"),
+                                ("classroom_id", Classroom, "教室")):
+        if field in update_data and db.get(model, update_data[field]) is None:
+            raise HTTPException(status_code=422, detail=f"指定{label}不存在")
     update_data["is_manual"] = True  # 标记为手动调整
     for key, value in update_data.items():
         setattr(entry, key, value)
