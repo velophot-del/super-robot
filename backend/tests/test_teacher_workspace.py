@@ -41,7 +41,8 @@ class TeacherWorkspaceTests(unittest.IsolatedAsyncioTestCase):
         self.db.commit()
         for entry_id, teacher_id, version in [(701, 7, 'schedule_100_old'),
                                               (702, 7, 'schedule_200_new'),
-                                              (703, 8, 'schedule_200_new')]:
+                                              (703, 8, 'schedule_200_new'),
+                                              (704, 8, 'schedule_150_other')]:
             self.db.add(ScheduleEntry(id=entry_id, schedule_version=version,
                 teacher_id=teacher_id, course_id=11, class_id=21, classroom_id=31,
                 week_number=1, day_of_week=1, period_start=1, period_end=1))
@@ -53,3 +54,9 @@ class TeacherWorkspaceTests(unittest.IsolatedAsyncioTestCase):
         old = await self.client.get('/api/my/timetable?version=schedule_100_old', headers=headers)
         self.assertEqual([e['id'] for e in old.json()], [701])
         self.assertEqual((await self.client.get('/api/my/timetable')).status_code, 401)
+        overview = await self.client.get('/api/my/planning-timetable?teacher_id=8', headers=headers)
+        self.assertEqual(overview.status_code, 200, overview.text)
+        self.assertEqual(overview.json()['legacy_versions'], ['schedule_200_new', 'schedule_100_old'])
+        self.assertEqual(overview.json()['batches'], [])
+        other = await self.client.get('/api/my/timetable?version=schedule_150_other', headers=headers)
+        self.assertEqual(other.json(), [])

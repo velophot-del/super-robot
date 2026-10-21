@@ -54,7 +54,7 @@ class TeacherProfileTests(unittest.IsolatedAsyncioTestCase):
         profile=profile_for(self.db,7)
         task={'id':1,'name':'Typography','code':'A','group':'G','required_hours':4,'start_week':1,'end_week':1,
             'direction':'Design','tags':['type'],'profile_verified':True,'slots':[{'day':1,'start':1,'count':4}]}
-        result=score_candidate(self.db,AcademicPlan(id=1,start_date=date(2027,2,1),weeks=20),task,7,profile,0,[])
+        result=score_candidate(self.db,AcademicPlan(id=1,start_date=date(2027,2,1),weeks=20),task,7,profile,[])
         self.assertEqual(result['professional_fit'],100);self.assertTrue(result['skilled_course_match'])
         self.assertEqual(result['professional_profile_source'],'self_declared')
         self.assertEqual(result['components'][0]['score'],0);self.assertEqual(result['components'][3]['score'],0)

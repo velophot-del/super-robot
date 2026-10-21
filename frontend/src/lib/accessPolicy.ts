@@ -12,3 +12,7 @@ export function canManage(role?: string): boolean {
 export function navigationKeys(role?: string): string[] {
   return canManage(role) ? ['/', 'data', 'schedule', '/timetable', '/export'] : ['/timetable'];
 }
+
+export function requiresAccountSetup(user: UserInfo | null | undefined): boolean {
+  return Boolean(user && (user.password_change_required || user.profile_required));
+}

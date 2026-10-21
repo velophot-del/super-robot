@@ -139,3 +139,15 @@ class CurriculumCourse(Base):
     course_id = Column(Integer,ForeignKey('courses.id'),nullable=False)
     metadata_json = Column(JSON,nullable=False)
     __table_args__ = (UniqueConstraint('document_id','row_code'),)
+
+
+class TeacherWorkloadEstimate(Base):
+    """本人授课周数/指导人数参数，不改写选课记录或发布快照。"""
+    __tablename__ = 'teacher_workload_estimates'
+    id = Column(Integer, primary_key=True)
+    plan_id = Column(Integer, ForeignKey('academic_plans.id'), nullable=False)
+    teacher_id = Column(Integer, ForeignKey('teachers.id'), nullable=False)
+    task_id = Column(Integer, ForeignKey('teaching_tasks.id'), nullable=False)
+    revision = Column(Integer, nullable=False, default=1)
+    payload = Column(JSON, nullable=False)
+    __table_args__ = (UniqueConstraint('plan_id','teacher_id','task_id'),)

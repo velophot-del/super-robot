@@ -18,6 +18,7 @@ class CourseBase(BaseModel):
     requires_lab: bool = Field(default=False, description="是否需要实验室")
     priority: int = Field(default=0, ge=0, le=10, description="优先级")
     department: Optional[str] = Field(None, max_length=100)
+    leader_teacher_id: Optional[int] = Field(None, ge=1)
     remarks: Optional[str] = None
 
 
@@ -40,12 +41,15 @@ class CourseUpdate(BaseModel):
     requires_lab: Optional[bool] = None
     priority: Optional[int] = Field(None, ge=0, le=10)
     department: Optional[str] = None
+    leader_teacher_id: Optional[int] = Field(None, ge=1)
     remarks: Optional[str] = None
 
 
 class CourseResponse(CourseBase):
     """课程响应"""
     id: int
+    leader_teacher_name: Optional[str] = None
+    leader_teacher_code: Optional[str] = None
     curriculum_sources: list[dict] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime

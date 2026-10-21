@@ -1,5 +1,5 @@
 """用户模型"""
-from sqlalchemy import Column, Integer, String, Boolean
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey
 from app.database import Base
 from app.models.base import TimestampMixin
 
@@ -13,3 +13,11 @@ class User(Base, TimestampMixin):
     email = Column(String(100), unique=True, nullable=False, index=True, comment="邮箱")
     password_hash = Column(String(255), nullable=False, comment="密码哈希")
     is_active = Column(Boolean, default=True, comment="是否激活")
+
+
+class AccountSetup(Base):
+    """新建工号账号的首次设置和令牌版本；不改写既有账号。"""
+    __tablename__ = 'account_setup'
+    user_id = Column(Integer, ForeignKey('users.id'), primary_key=True)
+    password_changed = Column(Boolean, nullable=False, default=False)
+    token_version = Column(Integer, nullable=False, default=0)

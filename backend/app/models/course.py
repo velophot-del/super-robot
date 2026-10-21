@@ -1,5 +1,5 @@
 """课程数据模型"""
-from sqlalchemy import Column, Integer, Float, String, Text, Boolean, DateTime, func
+from sqlalchemy import Column, Integer, Float, String, Text, Boolean, DateTime, func, ForeignKey
 from app.database import Base
 from app.models.base import TimestampMixin
 
@@ -21,6 +21,7 @@ class Course(Base, TimestampMixin):
     requires_lab = Column(Boolean, default=False, comment="是否需要实验室/机房")
     priority = Column(Integer, default=0, comment="优先级(0-10,越大越优先)")
     department = Column(String(100), nullable=True, comment="所属专业")
+    leader_teacher_id = Column(Integer, ForeignKey('teachers.id', ondelete='SET NULL'), nullable=True, comment='课程负责人')
     remarks = Column(Text, nullable=True, comment="备注/课程描述")
 
     def __repr__(self):

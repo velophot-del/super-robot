@@ -114,6 +114,28 @@ async def import_csv(entity_type: str, file: UploadFile = File(...), db: Session
             if row.get(column.name) is not None:
                 seen[column.name][row[column.name]] = row_number
 
+    if entity_type == 'courses':
+        # Resolve only rows that will be inserted; duplicate courses remain untouched.
+        import csv
+        raw_rows=list(csv.DictReader(io.StringIO(text_content)))
+        row_numbers=[]
+        for number, raw in enumerate(raw_rows,start=2):
+            code=raw.get('课程编码',raw.get('course_code',''))
+            row_numbers.append((str(code or '').strip(),number))
+        leader_errors=[]
+        for row in pending_rows:
+            code=row.pop('leader_teacher_code',None)
+            if not code:continue
+            teacher=db.query(Teacher).filter_by(teacher_code=code).first()
+            if teacher is None:
+                number=next((n for course_code,n in row_numbers if course_code==row['course_code']), '?')
+                leader_errors.append(f'第{number}行: 课程负责人工号“{code}”不存在，请先导入教师')
+            else:row['leader_teacher_id']=teacher.id
+        if leader_errors:
+            return {'success':False,'imported':0,'skipped':len(skipped_reasons),'total':len(data_rows),
+                    'errors':leader_errors,'warnings':skipped_reasons,
+                    'summary':f"课程负责人校验未通过，本次未导入任何记录（共{len(data_rows)}条，跳过{len(skipped_reasons)}条重复记录）"}
+
     imported_count = 0
     import_errors = []
     for row in pending_rows:
@@ -124,8 +146,19 @@ async def import_csv(entity_type: str, file: UploadFile = File(...), db: Session
         except Exception as e:
             import_errors.append(str(e))
 
+    accounts_created = 0
     try:
+        db.flush()
+        if entity_type == 'teachers':
+            from app.services.teacher_accounts import provision_teacher_account
+            for row in data_rows:
+                teacher = db.query(Teacher).filter_by(teacher_code=row['teacher_code']).first()
+                if teacher and teacher.name == row['name']:
+                    accounts_created += int(provision_teacher_account(db, teacher))
         db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=409, detail="导入数据存在名称、编号或必填字段冲突，本次未写入；请核对文件并刷新现有数据后重试，无需删除排课记录")
@@ -134,10 +167,11 @@ async def import_csv(entity_type: str, file: UploadFile = File(...), db: Session
         "success": len(import_errors) == 0,
         "imported": imported_count,
         "skipped": len(skipped_reasons),
+        "accounts_created": accounts_created,
         "total": len(data_rows),
         "errors": import_errors + [e["message"] for e in parse_errors if isinstance(e, dict)],
         "warnings": skipped_reasons + [w["message"] for w in validation_result.get("warnings", [])],
-        "summary": f"成功导入{imported_count}条记录，跳过{len(skipped_reasons)}条重复记录（已有数据未覆盖）" + (f"，{len(import_errors)}条失败" if import_errors else ""),
+        "summary": f"成功导入{imported_count}条记录，跳过{len(skipped_reasons)}条重复记录（已有数据未覆盖）" + (f"，创建{accounts_created}个工号账号" if entity_type == "teachers" else "") + (f"，{len(import_errors)}条失败" if import_errors else ""),
     }
 
 

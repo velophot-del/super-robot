@@ -27,7 +27,28 @@ class StagePlacementTests(unittest.IsolatedAsyncioTestCase):
         r=await self.client.put('/api/planning/plans/1/placement',headers=h,json=move);self.assertEqual(r.status_code,200,r.text);self.assertEqual(r.json()['task']['end_week'],19)
         move.update(revision=4,start_week=16)
         self.assertEqual((await self.client.put('/api/planning/plans/1/placement',headers=h,json=move)).status_code,409)
-        self.assertEqual((await self.client.post('/api/planning/plans/1/open',headers=h)).status_code,409)
+        self.assertEqual((await self.client.post('/api/planning/plans/1/open',headers=h)).status_code,200)
+
+    async def test_groups_can_be_added_in_draft_and_open_but_not_published(self):
+        h={'Authorization':'Bearer '+(await self.client.post('/api/debug/session',json={'role':'admin'})).json()['access_token']}
+        self.db.add(AcademicPlan(id=90,name='Groups',start_date=date(2027,9,6),weeks=20,
+                                 deadline=datetime(2027,8,1),state='draft',revision=1,
+                                 settings={'groups':['A']}))
+        self.db.commit()
+        url='/api/planning/plans/90/groups'
+        added=await self.client.put(url,headers=h,json={'revision':1,'groups':['A','B']})
+        self.assertEqual(added.status_code,200,added.text)
+        self.assertEqual(added.json()['revision'],2)
+        plan=self.db.get(AcademicPlan,90);self.assertEqual(plan.settings['groups'],['A','B'])
+        plan.state='open';self.db.commit()
+        # 开放阶段增加班级不递增版本，避免已提交志愿失效。
+        opened=await self.client.put(url,headers=h,json={'revision':2,'groups':['A','B','C']})
+        self.assertEqual(opened.status_code,200,opened.text)
+        self.assertEqual(opened.json()['revision'],2)
+        plan=self.db.get(AcademicPlan,90);self.assertEqual(plan.settings['groups'],['A','B','C'])
+        plan.state='published';self.db.commit()
+        frozen=await self.client.put(url,headers=h,json={'revision':2,'groups':['A']})
+        self.assertEqual(frozen.status_code,409,frozen.text)
 
     async def test_moving_manual_course_preserves_tail_periods(self):
         from app.models.planning import TeachingTask,PeriodSlot

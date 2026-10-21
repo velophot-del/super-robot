@@ -19,6 +19,9 @@ test('academic filters distinguish school year, semester, and cross-major plans'
   assert.deepEqual(filterSelectionPlans(plans,'2026—2027','all','all').map(p=>p.id),[1,2]);
   assert.deepEqual(filterSelectionPlans(plans,'2026—2027','2','all').map(p=>p.id),[2]);
   assert.deepEqual(filterSelectionPlans(plans,'2026—2027','all','Design').map(p=>p.id),[1]);
+  const withGlobal=[...plans,{id:4,start_date:'2027-02-01',academic_year:'2026—2027',academic_term:2,global_cycle:true}];
+  assert.deepEqual(filterSelectionPlans(withGlobal,'2026—2027','all','Design').map(p=>p.id),[1,4]);
+  assert.deepEqual(filterSelectionPlans(withGlobal,'2026—2027','2','Design').map(p=>p.id),[4]);
 });
 
 test('administrator week positions cover twenty columns and overlaps use separate lanes',async()=>{
@@ -34,3 +37,14 @@ test('administrator week positions cover twenty columns and overlaps use separat
  const {selectionSegments}=await import('../src/lib/selectionGrid.ts');
  assert.deepEqual(selectionSegments([],20).map(s=>[s.start,s.span,s.exam]),[[1,19,false],[20,1,true]]);
  });
+
+test('teacher preselection ignores tail-only boundaries but published view retains them',async()=>{
+  const {selectionSegments}=await import('../src/lib/selectionGrid.ts');
+  const tasks=[{id:1,start_week:1,end_week:5,tail_weeks:1},{id:2,start_week:1,end_week:5,tail_weeks:2}];
+  const selection=selectionSegments(tasks,20,{ignoreTail:true});
+  assert.deepEqual(selection.map(s=>[s.start,s.span,s.tasks.map(t=>t.id)]),[[1,5,[1,2]],[6,14,[]],[20,1,[]]]);
+  assert.equal(selection.at(-1).exam,true);
+  const published=selectionSegments(tasks,20);
+  assert.equal(published.filter(s=>s.tasks.length>0).length,3);
+  assert.equal(tasks[0].tail_weeks,1);
+});

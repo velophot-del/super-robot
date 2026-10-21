@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_db
-from app.models.user import User
+from app.models.user import User, AccountSetup
 from app.services.debug_identity import demo_enabled, demo_user
 
 # JWT 配置
@@ -122,15 +122,34 @@ async def get_current_user(
     user = db.query(User).filter(User.id == user_id).first()
     if user is None or not user.is_active:
         return None
-    from app.models.planning import AccountGrant, TeacherBinding
+    setup = db.get(AccountSetup, user.id)
+    if payload.get('pwdv', 0) != (setup.token_version if setup else 0):
+        return None
+    return load_account_access(user, db)
+
+
+def load_account_access(user, db):
+    from app.models.planning import AccountGrant, TeacherBinding, TeacherProfile
+    from app.services.personal_profile import missing_profile_fields
     user.grants = [{'capability': g.capability, 'scope': g.scope, 'scope_id': g.scope_id}
                    for g in db.query(AccountGrant).filter_by(user_id=user.id)]
     binding = db.get(TeacherBinding, user.id)
     user.teacher_id = binding.teacher_id if binding else None
+    setup = db.get(AccountSetup, user.id)
+    user.password_change_required = bool(setup and not setup.password_changed)
+    profile = db.get(TeacherProfile, binding.teacher_id) if binding else None
+    user.profile_required = bool(binding and missing_profile_fields(profile.payload if profile else {}))
     return user
 
 
+def account_token(user, db):
+    setup = db.get(AccountSetup, user.id)
+    return create_access_token({'sub': user.id, 'username': user.username,
+                                'pwdv': setup.token_version if setup else 0})
+
+
 async def require_user(
+    request: Request,
     current_user: Optional[User] = Depends(get_current_user),
 ) -> User:
     """要求用户必须登录，否则返回 401"""
@@ -139,6 +158,11 @@ async def require_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="请先登录",
         )
+    allowed = {('GET', '/api/auth/me'), ('POST', '/api/auth/password'),
+               ('GET', '/api/planning/self-profile'), ('PUT', '/api/planning/self-profile'),
+               ('GET', '/api/planning/self-profile/courses'), ('GET', '/api/planning/self-profile/course-groups')}
+    if (getattr(current_user, 'password_change_required', False) or getattr(current_user, 'profile_required', False)) and (request.method, request.url.path) not in allowed:
+        raise HTTPException(403, {'code': 'ACCOUNT_SETUP_REQUIRED', 'msg': '请先修改初始密码并完善个人资料'})
     return current_user
 
 

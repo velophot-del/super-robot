@@ -1,7 +1,7 @@
 // 登录页面
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { Form, Input, Button, Card, Typography, message, Space } from 'antd';
+import { useNavigate } from 'react-router-dom';
+import { Form, Input, Button, Card, Typography, message } from 'antd';
 import { UserOutlined, LockOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -78,11 +78,11 @@ export default function Login() {
         >
           <Form.Item
             name="username"
-            rules={[{ required: true, message: '请输入用户名' }]}
+            rules={[{ required: true, message: '请输入工号或管理员账号' }]}
           >
             <Input
               prefix={<UserOutlined style={{ color: '#64748d' }} />}
-              placeholder="用户名"
+              placeholder="工号 / 管理员账号"
             />
           </Form.Item>
 
@@ -114,14 +114,7 @@ export default function Login() {
           </Form.Item>
         </Form>
 
-        <div style={{ textAlign: 'center' }}>
-          <Space size={4}>
-            <Text type="secondary">还没有账户？</Text>
-            <Link to="/register" style={{ color: '#533afd', fontWeight: 500 }}>
-              立即注册
-            </Link>
-          </Space>
-        </div>
+        <Text type="secondary">教师账号由管理员导入，用户名为工号。首次登录须修改初始密码并完善个人资料。</Text>
       </Card>
     </div>
   );

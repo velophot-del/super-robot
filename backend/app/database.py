@@ -80,3 +80,8 @@ def _migrate_course_columns(engine):
                 conn.commit()
             except Exception:
                 pass
+
+        # Existing courses retain a null leader until an administrator explicitly assigns one.
+        if "leader_teacher_id" not in existing:
+            conn.execute(text("ALTER TABLE courses ADD COLUMN leader_teacher_id INTEGER REFERENCES teachers(id) ON DELETE SET NULL"))
+            conn.commit()

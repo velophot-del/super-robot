@@ -24,6 +24,8 @@ class UserResponse(BaseModel):
     role: str = "user"
     teacher_id: int | None = None
     is_demo: bool = False
+    password_change_required: bool = False
+    profile_required: bool = False
     grants: list[dict] = []
 
     model_config = {"from_attributes": True}
@@ -34,3 +36,8 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserResponse
+
+
+class PasswordChange(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=6, max_length=128)

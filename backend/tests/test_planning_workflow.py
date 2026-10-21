@@ -65,18 +65,57 @@ class PlanningWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(submitted.status_code, 200, submitted.text)
         matched = await self.client.post(f'/api/planning/plans/{pid}/match', headers=admin)
         self.assertEqual(matched.status_code, 200, matched.text)
+        self.assertEqual(matched.json()['auto_assigned'], 1)
         candidate = matched.json()['candidates'][0]
         self.assertEqual(candidate['professional_fit'], 100)
-        self.assertEqual(len(candidate['components']), 6)
-        self.assertEqual(matched.json()['maximum'], 105)
-        duplicate = await self.client.post(f'/api/planning/plans/{pid}/assign', headers=admin,
-            json={'task_id': task_id, 'teacher_ids': [7,7], 'match_id': matched.json()['id'], 'reason': 'Duplicate'})
+        self.assertEqual(len(candidate['components']), 5)
+        self.assertEqual(matched.json()['maximum'], 95)
+        # 系统自动匹配后，管理员可在实时课表中人工调剂。
+        state = (await self.client.get(f'/api/planning/plans/{pid}', headers=admin)).json()
+        self.assertEqual(state['tasks'][0]['teacher_ids'], [7])
+        self.assertEqual(state['tasks'][0]['applicant_count'], 1)
+        duplicate = await self.client.put(f'/api/planning/plans/{pid}/tasks/{task_id}/assignment', headers=admin,
+            json={'teacher_ids': [7,7], 'match_id': matched.json()['id'], 'reason': 'Duplicate'})
         self.assertEqual(duplicate.status_code,422,duplicate.text)
-        confirmed = await self.client.post(f'/api/planning/plans/{pid}/assign', headers=admin,
-            json={'task_id': task_id, 'teacher_ids': [7], 'match_id': matched.json()['id'], 'reason': 'Reviewed'})
+        confirmed = await self.client.put(f'/api/planning/plans/{pid}/tasks/{task_id}/assignment', headers=admin,
+            json={'teacher_ids': [7], 'match_id': matched.json()['id'], 'reason': 'Reviewed'})
         self.assertEqual(confirmed.status_code, 200, confirmed.text)
         state = (await self.client.get(f'/api/planning/plans/{pid}', headers=teacher)).json()
         self.assertEqual(state['tasks'][0]['teacher_ids'], [7])
+
+    async def test_match_weights_are_adjustable_and_applied(self):
+        from app.models.planning import AcademicPlan
+        pid = await self.plan(); admin = await self.headers(); teacher = await self.headers('teacher')
+        created = await self.client.post(f'/api/planning/plans/{pid}/tasks', headers=admin, json=self.task())
+        self.assertEqual(created.status_code, 200, created.text)
+        await self.client.post(f'/api/planning/plans/{pid}/open', headers=admin)
+        state = (await self.client.get(f'/api/planning/plans/{pid}', headers=teacher)).json()
+        draft = await self.client.put(f'/api/planning/plans/{pid}/draft', headers=teacher,
+            json={'revision': 0, 'plan_revision': state['revision'], 'task_ids': [created.json()['id']]})
+        await self.client.post(f'/api/planning/plans/{pid}/submit', headers=teacher,
+            json={'revision': draft.json()['revision']})
+        weights = {'team': 10, 'direction': 10, 'domain': 10, 'taught': 10, 'capacity': 10}
+        saved = await self.client.put(f'/api/planning/plans/{pid}/match-weights', headers=admin, json=weights)
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(saved.json()['match_weight_total'], 50)
+        state = (await self.client.get(f'/api/planning/plans/{pid}', headers=admin)).json()
+        self.assertEqual(state['match_weights'], weights)
+        self.assertEqual({item['key']: item['weight'] for item in state['match_weight_items']}, weights)
+        self.assertIn('团队成员', {item['name'] for item in state['match_weight_items']})
+        matched = await self.client.post(f'/api/planning/plans/{pid}/match', headers=admin)
+        self.assertEqual(matched.status_code, 200, matched.text)
+        self.assertEqual(matched.json()['maximum'], 50)
+        self.assertEqual(matched.json()['match_weights'], weights)
+        candidate = matched.json()['candidates'][0]
+        self.assertEqual(candidate['maximum'], 50)
+        self.assertEqual([component['maximum'] for component in candidate['components']], [10, 10, 10, 10, 10])
+        self.assertEqual(set(candidate['match_weights']), set(weights))
+        invalid = await self.client.put(f'/api/planning/plans/{pid}/match-weights', headers=admin,
+            json={'team': 0, 'direction': 0, 'domain': 0, 'taught': 0, 'capacity': 0})
+        self.assertEqual(invalid.status_code, 422)
+        plan = self.db.get(AcademicPlan, pid); plan.state = 'published'; self.db.commit()
+        frozen = await self.client.put(f'/api/planning/plans/{pid}/match-weights', headers=admin, json=weights)
+        self.assertEqual(frozen.status_code, 409)
 
     async def test_missing_profile_is_unknown_and_same_day_reserved(self):
         pid = await self.plan(); admin = await self.headers()
@@ -98,7 +137,7 @@ class PlanningWorkflowTests(unittest.IsolatedAsyncioTestCase):
         await self.client.put(f'/api/planning/plans/{pid}/draft',headers=teacher,json={'revision':0,'plan_revision':s['revision'],'task_ids':[tid]})
         await self.client.post(f'/api/planning/plans/{pid}/submit',headers=teacher,json={'revision':1})
         match=(await self.client.post(f'/api/planning/plans/{pid}/match',headers=admin)).json()
-        await self.client.post(f'/api/planning/plans/{pid}/assign',headers=admin,json={'task_id':tid,'teacher_ids':[7],'match_id':match['id'],'reason':'manual review of missing profile'})
+        self.assertEqual(match['auto_assigned'],1)
         r=await self.client.post(f'/api/planning/plans/{pid}/publish',headers=admin)
         self.assertEqual(r.status_code,200,r.text)
         r=await self.client.get(f'/api/planning/plans/{pid}/export',headers=teacher)
@@ -106,7 +145,7 @@ class PlanningWorkflowTests(unittest.IsolatedAsyncioTestCase):
         from openpyxl import load_workbook
         from io import BytesIO
         workbook=load_workbook(BytesIO(r.content))
-        self.assertEqual(workbook.active.cell(2,1).value,'Typography')
+        self.assertEqual(workbook['课程明细'].cell(2,1).value,'Typography')
 
     async def test_open_does_not_require_room_and_room_can_be_set_later(self):
         pid=await self.plan();admin=await self.headers()

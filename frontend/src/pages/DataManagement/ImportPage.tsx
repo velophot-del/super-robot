@@ -108,6 +108,7 @@ export default function ImportPage() {
               <p className="ant-upload-drag-icon"><InboxOutlined style={{ color: '#533afd' }} /></p>
               <p className="ant-upload-text">点击或拖拽CSV文件到此区域</p>
               <p className="ant-upload-hint">支持.csv格式文件，请按模板格式填写数据</p>
+              {entityType==='courses'&&<p className="ant-upload-hint">课程负责人（工号）为选填项，需填写已有教师工号；重复课程跳过，不覆盖负责人。</p>}
             </Dragger>
           </div>
 
@@ -124,6 +125,7 @@ export default function ImportPage() {
         </Space>
       </Card>
 
+      {entityType==='teachers'&&<Alert type="info" showIcon style={{marginBottom:16}} message="教师导入会创建工号登录账号，初始密码为123456；首次登录必须修改密码并完善资料。重复导入不重置密码，账号冲突不会自动覆盖。"/>}
       {/* 导入结果 */}
       {result && (
         <Card title="导入结果" bordered style={{ borderColor: '#e3e8ee' }}>

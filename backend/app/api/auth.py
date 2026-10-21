@@ -3,41 +3,17 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models.user import User
-from app.schemas.user import UserRegister, UserLogin, UserResponse, TokenResponse
-from app.services.auth import hash_password, verify_password, create_access_token, require_user
+from app.models.user import User, AccountSetup
+from app.schemas.user import UserRegister, UserLogin, UserResponse, TokenResponse, PasswordChange
+from app.services.auth import hash_password, verify_password, require_user, load_account_access, account_token
 
 router = APIRouter(prefix="/api/auth", tags=["用户认证"])
 
 
-@router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/register", include_in_schema=False)
 def register(data: UserRegister, db: Session = Depends(get_db)):
-    """用户注册"""
-    # 检查用户名是否已存在
-    if db.query(User).filter(User.username == data.username).first():
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="用户名已被注册")
-
-    # 检查邮箱是否已存在
-    if db.query(User).filter(User.email == data.email).first():
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="邮箱已被注册")
-
-    # 创建用户
-    user = User(
-        username=data.username,
-        email=data.email,
-        password_hash=hash_password(data.password),
-    )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-
-    # 生成令牌
-    access_token = create_access_token(data={"sub": user.id, "username": user.username})
-
-    return TokenResponse(
-        access_token=access_token,
-        user=UserResponse.model_validate(user),
-    )
+    """账号由管理员导入创建，关闭公开注册。"""
+    raise HTTPException(403, '公开注册已关闭，请联系管理员导入教师名单')
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -56,7 +32,8 @@ def login(data: UserLogin, db: Session = Depends(get_db)):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="账户已被禁用")
 
     # 生成令牌
-    access_token = create_access_token(data={"sub": user.id, "username": user.username})
+    load_account_access(user, db)
+    access_token = account_token(user, db)
 
     return TokenResponse(
         access_token=access_token,
@@ -68,3 +45,20 @@ def login(data: UserLogin, db: Session = Depends(get_db)):
 def get_me(current_user: User = Depends(require_user)):
     """获取当前登录用户信息"""
     return UserResponse.model_validate(current_user)
+
+
+@router.post('/password', response_model=TokenResponse)
+def change_password(data: PasswordChange, user=Depends(require_user), db: Session=Depends(get_db)):
+    if getattr(user, 'is_demo', False):
+        raise HTTPException(403, '演示身份没有真实账号密码')
+    if not verify_password(data.current_password, user.password_hash):
+        raise HTTPException(400, '当前密码不正确')
+    if data.new_password == '123456' or verify_password(data.new_password, user.password_hash):
+        raise HTTPException(422, '新密码不能与原密码或初始密码相同')
+    setup = db.get(AccountSetup, user.id)
+    if not setup:
+        setup = AccountSetup(user_id=user.id, password_changed=True, token_version=0); db.add(setup)
+    setup.password_changed = True; setup.token_version += 1
+    user.password_hash = hash_password(data.new_password)
+    db.commit(); load_account_access(user, db)
+    return TokenResponse(access_token=account_token(user, db), user=UserResponse.model_validate(user))

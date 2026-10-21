@@ -108,6 +108,7 @@ export const teacherApi = {
   delete: (id: number) => apiClient.delete(`/teachers/${id}`),
   getCourses: (id: number, version?: string) =>
     apiClient.get(`/teachers/${id}/courses`, { params: { version } }),
+  getCourseAffiliations: (id: number) => apiClient.get(`/teachers/${id}/course-affiliations`),
 };
 
 // ===== 课程 API =====
@@ -141,17 +142,6 @@ export const scheduleApi = {
   getExplanation: (version?: string) => apiClient.get('/schedules/explanation', { params: { version } }),
 };
 
-// ===== 约束 API =====
-export const constraintApi = {
-  list: (params?: any) => apiClient.get('/constraints/', { params }),
-  getDefaults: () => apiClient.get('/constraints/defaults'),
-  get: (id: number) => apiClient.get(`/constraints/${id}`),
-  create: (data: any) => apiClient.post('/constraints/', data),
-  update: (id: number, data: any) => apiClient.put(`/constraints/${id}`, data),
-  delete: (id: number) => apiClient.delete(`/constraints/${id}`),
-  learn: () => apiClient.post('/constraints/learn'),
-};
-
 // ===== 导入导出 API =====
 export const ioApi = {
   downloadTemplate: (entityType: string) =>
@@ -177,4 +167,5 @@ export const authApi = {
   login: (data: { username: string; password: string }) =>
     apiClient.post('/auth/login', data),
   getMe: () => apiClient.get('/auth/me'),
+  changePassword: (data: {current_password: string; new_password: string}) => apiClient.post('/auth/password', data),
 };

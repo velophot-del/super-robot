@@ -60,8 +60,9 @@ def cell(lines,width,prototype,span=1,vertical=None,size=18):
     return c
 
 
-def stage_runs(tasks,weeks):
+def stage_runs(tasks,weeks,exam_weeks=None):
     """Merge only adjacent weeks whose displayed teaching content is identical."""
+    exam=set(exam_weeks) if exam_weeks is not None else {weeks}
     content=[]
     for week in range(1,weeks+1):
         lines=[]
@@ -73,7 +74,7 @@ def stage_runs(tasks,weeks):
                 '【'+(task.get('room_name') or '地点待落实')+'】',
                 '；'.join(f"{DAYS[s['day']-1]}{s['start']}—{s['start']+s['count']-1}节" for s in slots),
                 f"{task.get('credits',0):g}学分 / {task.get('required_hours',0)}学时"])
-        if not lines:lines=['考试'] if week>weeks-1 else ['']
+        if not lines:lines=['考试'] if week in exam else ['']
         content.append(tuple(lines))
     runs=[]
     for index,lines in enumerate(content):
@@ -83,9 +84,9 @@ def stage_runs(tasks,weeks):
 
 
 def academic_title(plan):
-    start=date.fromisoformat(plan['start_date'])
-    first=start.year if start.month>=8 else start.year-1
-    term='第一' if int(plan.get('semester',1))%2 else '第二'
+    from app.services.academic_scope import academic_start_year,plan_term
+    first=academic_start_year(plan['start_date'])
+    term='第一' if plan_term(plan)==1 else '第二'
     return f'{first}—{first+1}学年{term}学期'
 
 
@@ -117,7 +118,9 @@ def build_word_timetable(batches,major,prepared_on=None):
         # Pack rows conservatively. Word can repeat the two header rows on overflow.
         pages=[];page=[];used=0
         for label,items in sorted(by_group.items()):
-            runs=stage_runs(items,weeks)
+            from app.services.exam_weeks import exam_weeks_for
+            exam=exam_weeks_for(plan,items[0].get('cohort') if items else None,label,weeks)
+            runs=stage_runs(items,weeks,exam)
             heights=[]
             for a,b,lines in runs:
                 chars_per_line=max(2,sum(widths[3+a:3+b])/180)
@@ -158,7 +161,7 @@ def build_word_timetable(batches,major,prepared_on=None):
                 for a,b,lines in runs:row.append(cell(lines,sum(widths[3+a:3+b]),source_cells[3],span=b-a,size=16))
                 table.append(row)
             body.append(table)
-            body.append(paragraph('注：格内课程按阶段周段合并；同周两门上下排列，各自注明教师、地点和时段。最后一周考试（20周周期为第20周）。',size=16))
+            body.append(paragraph('注：格内课程按阶段周段合并；同周两门上下排列，各自注明教师、地点和时段。考试周按年级设置。',size=16))
     body.append(section)
     package['word/document.xml']=ET.tostring(root,encoding='utf-8',xml_declaration=True)
     # Original author metadata and old year titles do not belong to the generated timetable.

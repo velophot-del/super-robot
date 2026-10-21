@@ -12,6 +12,8 @@ interface AuthState {
   switchDemo: (role: 'admin' | 'teacher', teacherId?: number) => Promise<void>;
   login: (data: LoginRequest) => Promise<void>;
   register: (data: RegisterRequest) => Promise<void>;
+  refreshUser: () => Promise<UserInfo>;
+  changePassword: (data: {current_password: string; new_password: string}) => Promise<void>;
   logout: () => void;
 }
 
@@ -68,6 +70,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(res.user);
   }, []);
 
+  const refreshUser = useCallback(async () => {
+    const identity = readAuthIdentity(import.meta.env.DEV, localStorage, sessionStorage);
+    const current: UserInfo = await authApi.getMe();
+    if (isCurrentIdentity(identity, import.meta.env.DEV, localStorage, sessionStorage)) setUser(current);
+    return current;
+  }, []);
+
+  const changePassword = useCallback(async (data: {current_password: string; new_password: string}) => {
+    const identity = readAuthIdentity(import.meta.env.DEV, localStorage, sessionStorage);
+    const res: any = await authApi.changePassword(data);
+    if (!isCurrentIdentity(identity, import.meta.env.DEV, localStorage, sessionStorage)) return;
+    localStorage.setItem('access_token', res.access_token);
+    setToken(res.access_token); setUser(res.user);
+  }, []);
+
   const logout = useCallback(() => {
     if (user?.is_demo) sessionStorage.removeItem(DEMO_TOKEN_KEY);
     else localStorage.removeItem('access_token');
@@ -83,7 +100,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [demoEnabled]);
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, demoEnabled, switchDemo, login, register, logout }}>
+    <AuthContext.Provider value={{ user, token, loading, demoEnabled, switchDemo, login, register, logout, refreshUser, changePassword }}>
       {children}
     </AuthContext.Provider>
   );

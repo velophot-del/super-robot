@@ -36,11 +36,12 @@ CSV_TEMPLATES = {
         "required_fields": ["name", "course_code", "semester_sessions"],
         "optional_fields": ["course_type", "weekly_sessions", "hours_per_session", "total_hours",
                           "credits", "requires_consecutive",
-                          "requires_lab", "priority", "department", "remarks"],
+                          "requires_lab", "priority", "department", "remarks", "leader_teacher_code"],
         "field_names": {
             "name": "课程名称",
             "course_code": "课程编码",
             "course_type": "课程类型",
+            "leader_teacher_code": "课程负责人（工号）",
             "semester_sessions": "学期教学次数",
             "weekly_sessions": "每周上课次数",
             "hours_per_session": "每次课时",

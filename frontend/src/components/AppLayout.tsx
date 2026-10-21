@@ -3,34 +3,25 @@ import { useState } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { Layout, Menu, Button, Typography, Dropdown, Avatar, Space, message } from 'antd';
 import {
-  DashboardOutlined,
   TeamOutlined,
   UserOutlined,
   BookOutlined,
   BankOutlined,
   ScheduleOutlined,
-  SettingOutlined,
   ImportOutlined,
-  ExportOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   ThunderboltOutlined,
-  AlertOutlined,
   LogoutOutlined,
 } from '@ant-design/icons';
 import { useAuth } from '../contexts/AuthContext';
 import DebugToolbar from './DebugToolbar';
-import { can } from '../lib/accessPolicy';
+import { can, requiresAccountSetup } from '../lib/accessPolicy';
 
 const { Header, Sider, Content, Footer } = Layout;
 const { Text } = Typography;
 
-const menuItems = [
-  {
-    key: '/',
-    icon: <DashboardOutlined />,
-    label: '工作台',
-  },
+const dataMenu = [
   {
     key: 'data',
     icon: <TeamOutlined />,
@@ -43,26 +34,6 @@ const menuItems = [
       { key: '/data/import', icon: <ImportOutlined />, label: '数据导入' },
     ],
   },
-  {
-    key: 'schedule',
-    icon: <ScheduleOutlined />,
-    label: '智能排课',
-    children: [
-      { key: '/schedule/constraints', icon: <SettingOutlined />, label: '约束配置' },
-      { key: '/schedule/engine', icon: <ThunderboltOutlined />, label: '执行排课' },
-      { key: '/schedule/conflicts', icon: <AlertOutlined />, label: '冲突检测' },
-    ],
-  },
-  {
-    key: '/timetable',
-    icon: <ScheduleOutlined />,
-    label: '课表视图',
-  },
-  {
-    key: '/export',
-    icon: <ExportOutlined />,
-    label: '导出课表',
-  },
 ];
 
 export default function AppLayout() {
@@ -70,13 +41,20 @@ export default function AppLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout } = useAuth();
-  const visibleMenuItems = [
+  const visibleMenuItems = can(user,'admin') ? [
+    {key:'/planning',icon:<BookOutlined/>,label:'排课周期计划'},
+    {key:'/planning/review',icon:<ScheduleOutlined/>,label:'匹配与审核'},
+    ...dataMenu,
+    {key:'/materials',icon:<ImportOutlined/>,label:'培养方案与课程来源'},
+    {key:'/timetable',icon:<ScheduleOutlined/>,label:'历史课表'},
+  ] : [
     ...(can(user,'teaching') ? [{key:'/profile',icon:<UserOutlined/>,label:'个人资料'}] : []),
-    { key:'/planning', icon:<BookOutlined />, label:can(user,'teaching')?'我的选课与教学任务':'计划、匹配与审核' },
+    { key:'/planning', icon:<BookOutlined />, label:can(user,'teaching')?'选课工作台':'计划、匹配与审核' },
     ...(can(user,'teaching')&&(can(user,'admin')||can(user,'review')||can(user,'publish')) ? [{key:'/planning/review',icon:<ScheduleOutlined/>,label:'管理与审核工作台'}] : []),
-    ...(can(user,'admin') ? menuItems.filter(item => item.key === 'data') : []),
+    ...(can(user,'admin') ? dataMenu : []),
     ...(can(user,'admin') ? [{key:'/materials',icon:<ImportOutlined/>,label:'培养方案与课程来源'}] : []),
-    { key:'/timetable', icon:<ScheduleOutlined />, label:'历史课表查看' },
+    ...(can(user,'teaching') ? [{key:'/planning/matches',icon:<BookOutlined/>,label:'我的匹配结果'}] : []),
+    { key:'/timetable', icon:<ScheduleOutlined />, label:can(user,'teaching')?'我的课表':'历史课表查看' },
   ];
 
   const selectedKey = location.pathname === '/' ? '/' : location.pathname;
@@ -141,7 +119,7 @@ export default function AppLayout() {
           selectedKeys={[selectedKey]}
           defaultOpenKeys={openKeys}
           onClick={({ key }) => navigate(key)}
-          items={visibleMenuItems}
+          items={requiresAccountSetup(user) ? visibleMenuItems.filter(item => item.key === '/profile') : visibleMenuItems}
           style={{
             background: 'transparent',
             borderRight: 'none',

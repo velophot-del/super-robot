@@ -1,33 +1,30 @@
-// 教师管理页面（含查看课程分配 + 分配可教课程）
+// 教师管理页面（含查看已排课程 + 只读课程归属）
 import { useState } from 'react';
 import {
   Form, Input, InputNumber, Select, Button, Drawer, Table, Descriptions,
   Statistic, Row, Col, Empty, message, Tag, Typography,
-  Checkbox, Divider, Alert, Spin,
+  Divider, Alert, Spin,
 } from 'antd';
 import { EyeOutlined, SettingOutlined } from '@ant-design/icons';
 import DataTable from '../../components/DataTable';
-import { teacherApi, courseApi } from '../../api/client';
-import type { TeacherCoursesResponse, TeacherCourseInfo, Course } from '../../types';
+import { teacherApi } from '../../api/client';
+import type { TeacherCoursesResponse, TeacherCourseInfo, TeacherCourseAffiliations } from '../../types';
 
 const { Text } = Typography;
 
 export default function TeachersPage() {
-  // ---- 查看课程分配状态 ----
+  // ---- 查看已排课程 ----
   const [courseDrawerOpen, setCourseDrawerOpen] = useState(false);
   const [selectedTeacher, setSelectedTeacher] = useState<{ id: number; name: string; department?: string; title?: string } | null>(null);
   const [teacherCourses, setTeacherCourses] = useState<TeacherCoursesResponse | null>(null);
   const [coursesLoading, setCoursesLoading] = useState(false);
 
-  // ---- 分配可教课程状态 ----
-  const [assignDrawerOpen, setAssignDrawerOpen] = useState(false);
-  const [assignTeacher, setAssignTeacher] = useState<any>(null);
-  const [allCourses, setAllCourses] = useState<Course[]>([]);
-  const [selectedCourseIds, setSelectedCourseIds] = useState<number[]>([]);
-  const [assignLoading, setAssignLoading] = useState(false);
-  const [assignSaving, setAssignSaving] = useState(false);
+  // ---- 查看课程归属（只读） ----
+  const [affiliationDrawerOpen, setAffiliationDrawerOpen] = useState(false);
+  const [affiliationTeacher, setAffiliationTeacher] = useState<any>(null);
+  const [affiliations, setAffiliations] = useState<TeacherCourseAffiliations | null>(null);
+  const [affiliationLoading, setAffiliationLoading] = useState(false);
 
-  // ---- 查看已排课程 ----
   const handleViewCourses = async (record: any) => {
     setSelectedTeacher({ id: record.id, name: record.name, department: record.department, title: record.title });
     setCourseDrawerOpen(true);
@@ -43,52 +40,21 @@ export default function TeachersPage() {
     }
   };
 
-  // ---- 分配可教课程 ----
-  const handleOpenAssign = async (record: any) => {
-    setAssignTeacher(record);
-    setAssignDrawerOpen(true);
-    setAssignLoading(true);
-
-    // 解析教师当前的 courses_can_teach
-    let currentIds: number[] = [];
-    if (record.courses_can_teach) {
-      try {
-        const parsed = JSON.parse(record.courses_can_teach);
-        currentIds = Array.isArray(parsed) ? parsed.map(Number) : [];
-      } catch {
-        currentIds = [];
-      }
-    }
-    setSelectedCourseIds(currentIds);
-
-    // 加载全量课程
+  const handleOpenAffiliations = async (record: any) => {
+    setAffiliationTeacher(record);
+    setAffiliationDrawerOpen(true);
+    setAffiliationLoading(true);
+    setAffiliations(null);
     try {
-      const courses = await courseApi.list({ limit: 500 }) as Course[];
-      setAllCourses(courses);
+      const res = await teacherApi.getCourseAffiliations(record.id) as TeacherCourseAffiliations;
+      setAffiliations(res);
     } catch (e: any) {
-      message.error(`加载课程列表失败: ${e.message}`);
+      message.error(`加载课程归属失败: ${e.message}`);
     } finally {
-      setAssignLoading(false);
+      setAffiliationLoading(false);
     }
   };
 
-  const handleSaveAssign = async () => {
-    if (!assignTeacher) return;
-    setAssignSaving(true);
-    try {
-      await teacherApi.update(assignTeacher.id, {
-        courses_can_teach: JSON.stringify(selectedCourseIds),
-      });
-      message.success(`${assignTeacher.name} 的课程分配已更新`);
-      setAssignDrawerOpen(false);
-    } catch (e: any) {
-      message.error(`保存失败: ${e.message}`);
-    } finally {
-      setAssignSaving(false);
-    }
-  };
-
-  // 课程表格列（查看已排课程用）
   const courseColumns = [
     { title: '课程名称', dataIndex: 'course_name', key: 'course_name', width: 130 },
     { title: '课程编码', dataIndex: 'course_code', key: 'course_code', width: 90 },
@@ -100,13 +66,12 @@ export default function TeachersPage() {
     { title: '周排课次数', dataIndex: 'time_slots', key: 'time_slots', width: 75 },
   ];
 
-  // 按专业分组的课程（分配可教课程用）
-  const coursesByDept: Record<string, Course[]> = {};
-  for (const c of allCourses) {
-    const dept = c.department || '通用';
-    if (!coursesByDept[dept]) coursesByDept[dept] = [];
-    coursesByDept[dept].push(c);
-  }
+  const affiliationColumns = [
+    { title: '课程名称', dataIndex: 'name', key: 'name' },
+    { title: '课程编码', dataIndex: 'course_code', key: 'course_code', width: 120 },
+    { title: '所属专业', dataIndex: 'department', key: 'department', width: 140, render: (v: string | null) => v || '未设置' },
+    { title: '课程性质', dataIndex: 'course_type', key: 'course_type', width: 110, render: (v: string | null) => v ? <Tag>{v}</Tag> : '-' },
+  ];
 
   return (
     <>
@@ -157,7 +122,7 @@ export default function TeachersPage() {
               type="link"
               size="small"
               icon={<SettingOutlined />}
-              onClick={() => handleOpenAssign(record)}
+              onClick={() => handleOpenAffiliations(record)}
               style={{ color: '#f59e0b' }}
             >
               分配课程
@@ -169,7 +134,7 @@ export default function TeachersPage() {
               onClick={() => handleViewCourses(record)}
               style={{ color: '#533afd' }}
             >
-              查看课程
+              旧排课记录
             </Button>
           </>
         )}
@@ -177,7 +142,7 @@ export default function TeachersPage() {
 
       {/* ===== Drawer 1: 查看已排课表 ===== */}
       <Drawer
-        title={selectedTeacher ? `${selectedTeacher.name} - 已排课程` : '已排课程'}
+        title={selectedTeacher ? `${selectedTeacher.name} - 旧系统排课记录` : '旧系统排课记录'}
         open={courseDrawerOpen}
         onClose={() => setCourseDrawerOpen(false)}
         width={620}
@@ -190,6 +155,8 @@ export default function TeachersPage() {
             <Descriptions.Item label="职称">{selectedTeacher.title || '未设置'}</Descriptions.Item>
           </Descriptions>
         )}
+        <Alert type="info" showIcon style={{ marginBottom: 16 }} title="此处仅显示旧版排课记录"
+          description="新排课周期的授课安排请在“历史课表”或教师本人“我的课表”中查看。" />
 
         {teacherCourses && teacherCourses.courses.length > 0 ? (
           <>
@@ -216,98 +183,68 @@ export default function TeachersPage() {
         )}
       </Drawer>
 
-      {/* ===== Drawer 2: 分配可教课程 ===== */}
+      {/* ===== Drawer 2: 课程归属（只读） ===== */}
       <Drawer
-        title={assignTeacher ? `${assignTeacher.name} - 分配可教课程` : '分配可教课程'}
-        open={assignDrawerOpen}
-        onClose={() => setAssignDrawerOpen(false)}
-        width={560}
+        title={affiliationTeacher ? `${affiliationTeacher.name} - 课程归属` : '课程归属'}
+        open={affiliationDrawerOpen}
+        onClose={() => setAffiliationDrawerOpen(false)}
+        width={720}
         destroyOnClose
-        footer={
-          <div style={{ textAlign: 'right' }}>
-            <Button onClick={() => setAssignDrawerOpen(false)} style={{ marginRight: 8 }}>
-              取消
-            </Button>
-            <Button
-              type="primary"
-              onClick={handleSaveAssign}
-              loading={assignSaving}
-              icon={<SettingOutlined />}
-            >
-              保存分配
-            </Button>
-          </div>
-        }
+        footer={<div style={{ textAlign: 'right' }}><Button onClick={() => setAffiliationDrawerOpen(false)}>关闭</Button></div>}
       >
-        {assignTeacher && (
+        {affiliationTeacher && (
           <Descriptions size="small" column={2} style={{ marginBottom: 12 }}>
-            <Descriptions.Item label="教师">{assignTeacher.name}</Descriptions.Item>
-            <Descriptions.Item label="部门">{assignTeacher.department || '未设置'}</Descriptions.Item>
+            <Descriptions.Item label="教师">{affiliationTeacher.name}</Descriptions.Item>
+            <Descriptions.Item label="部门">{affiliationTeacher.department || '未设置'}</Descriptions.Item>
           </Descriptions>
         )}
-
         <Alert
           type="info"
           showIcon
           style={{ marginBottom: 16 }}
-          message="勾选该教师可以教授的课程。排课时，该教师只会被分配到已勾选的课程，避免跨专业分配。"
+          message="此处只读展示，不再勾选分配课程"
+          description="所属课程组来自教师个人资料中的“参与课程组”；专业课程负责人来自课程管理中的“课程负责人”设置。"
         />
 
-        {assignLoading ? (
-          <div style={{ textAlign: 'center', padding: 40 }}>
-            <Spin tip="加载课程列表..." />
-          </div>
+        {affiliationLoading ? (
+          <div style={{ textAlign: 'center', padding: 40 }}><Spin tip="加载课程归属..." /></div>
         ) : (
-          <Checkbox.Group
-            value={selectedCourseIds}
-            onChange={(vals) => setSelectedCourseIds(vals as number[])}
-            style={{ width: '100%' }}
-          >
-            {Object.entries(coursesByDept).map(([dept, courses]) => {
-              const deptCourseIds = courses.map(c => c.id);
-              const allChecked = deptCourseIds.every(id => selectedCourseIds.includes(id));
-              return (
-                <div key={dept} style={{ marginBottom: 16 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
-                    <Tag color="purple">{dept}</Tag>
-                    <Button
-                      type="link"
-                      size="small"
-                      onClick={() => {
-                        if (allChecked) {
-                          setSelectedCourseIds(selectedCourseIds.filter(id => !deptCourseIds.includes(id)));
-                        } else {
-                          setSelectedCourseIds([...new Set([...selectedCourseIds, ...deptCourseIds])]);
-                        }
-                      }}
-                    >
-                      {allChecked ? '取消全选' : '全选'}
-                    </Button>
-                  </div>
-                  <Row gutter={[4, 4]}>
-                    {courses.map(c => (
-                      <Col span={24} key={c.id}>
-                        <Checkbox value={c.id}>
-                          <span style={{ fontSize: 13 }}>
-                            {c.name}
-                            <Text type="secondary" style={{ fontSize: 11, marginLeft: 4 }}>
-                              {c.course_code} ({c.semester_sessions}次/学期, {c.hours_per_session}课时/次)
-                            </Text>
-                          </span>
-                        </Checkbox>
-                      </Col>
-                    ))}
-                  </Row>
-                </div>
-              );
-            })}
-          </Checkbox.Group>
-        )}
+          <>
+            <Divider titlePlacement="start">所属课程组（教师个人资料）</Divider>
+            {affiliations?.course_groups.length ? (
+              <Table
+                dataSource={affiliations.course_groups}
+                columns={affiliationColumns}
+                rowKey="id"
+                pagination={false}
+                size="small"
+                style={{ border: '1px solid #e3e8ee', borderRadius: 8 }}
+              />
+            ) : (
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description={affiliations?.profile_updated ? '教师尚未在个人资料中申报参与课程组' : '教师尚未完善个人资料'}
+              />
+            )}
 
-        <Divider />
-        <Text type="secondary">
-          已选择 <Text strong style={{ color: '#533afd' }}>{selectedCourseIds.length}</Text> / {allCourses.length} 门课程
-        </Text>
+            <Divider titlePlacement="start">专业课程负责人（课程管理）</Divider>
+            {affiliations?.leader_courses.length ? (
+              <Table
+                dataSource={affiliations.leader_courses}
+                columns={affiliationColumns}
+                rowKey="id"
+                pagination={false}
+                size="small"
+                style={{ border: '1px solid #e3e8ee', borderRadius: 8 }}
+              />
+            ) : (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂未担任专业课程负责人" />
+            )}
+            <Text type="secondary" style={{ display: 'block', marginTop: 16, fontSize: 12 }}>
+              课程负责人由管理员在“课程管理”中设置；参与课程组由教师本人在“个人资料”中维护。
+            </Text>
+          </>
+        )}
       </Drawer>
     </>
   );

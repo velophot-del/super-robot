@@ -24,11 +24,11 @@ class PlanningConstraintTests(unittest.IsolatedAsyncioTestCase):
         task={'id':1,'name':'Typography','code':'A','group':'G','required_hours':4,
             'start_week':1,'end_week':1,'direction':'Design','tags':['type'],
             'profile_verified':True,'slots':[{'day':1,'start':1,'count':4}]}
-        result=score_candidate(self.db,plan,task,7,{},0,[])
+        result=score_candidate(self.db,plan,task,7,{},[])
         self.assertIsNone(result['professional_fit']);self.assertIsNone(result['raw_total'])
         profile={'direction':'Design','tags':['type'],'verified':True,'team_codes':['A'],
             'taught_codes':['A'],'external_hours':{'1':20},'weekly_limit':20}
-        result=score_candidate(self.db,plan,task,7,profile,0,[])
+        result=score_candidate(self.db,plan,task,7,profile,[])
         self.assertEqual(result['professional_fit'],100)
         self.assertFalse(result['eligible'])
         self.assertIn('外部',result['reasons'][0])

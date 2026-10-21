@@ -5,6 +5,6 @@ export function stageLanes<T extends {id:number;start_week:number;end_week:numbe
     ends[lane]=task.end_week;return {task,lane};
   });
 }
-export function dropWeek(clientX:number,left:number,width:number):number{
-  return Math.max(1,Math.min(20,Math.floor((clientX-left)/width*20)+1));
+export function dropWeek(clientX:number,left:number,width:number,weeks=20):number{
+  return Math.max(1,Math.min(weeks,Math.floor((clientX-left)/width*weeks)+1));
 }

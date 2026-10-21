@@ -86,9 +86,10 @@ class DebugModeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_normal_login_still_works_without_demo_mode(self):
         with patch.object(settings, 'DEBUG_DEMO_MODE', False):
-            registered = await self.client.post('/api/auth/register', json={
-                'username': 'normal_user', 'email': 'normal@example.com', 'password': 'TestPassword123'})
-            self.assertEqual(registered.status_code, 201)
+            from app.models.user import User
+            from app.services.auth import hash_password
+            self.db.add(User(username='normal_user',email='normal@example.com',password_hash=hash_password('TestPassword123')))
+            self.db.commit()
             logged_in = await self.client.post('/api/auth/login', json={
                 'username': 'normal_user', 'password': 'TestPassword123'})
             self.assertEqual(logged_in.status_code, 200)

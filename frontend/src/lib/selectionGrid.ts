@@ -9,15 +9,16 @@ export function academicYear(start:string):string{
 export function filterSelectionPlans<T extends SelectionPlan>(plans:T[],year:string,term:string,major:string):T[]{
   return plans.filter(p=>(p.academic_year||academicYear(p.start_date))===year&&
     (term==='all'||String(p.academic_term||((p.semester||2)%2?1:2))===term)&&
-    (major==='all'||p.major===major));
+    (major==='all'||!p.major||p.major===major));
 }
 
-export function selectionSegments<T extends SelectionTask>(tasks:T[],weeks:number){
+export function selectionSegments<T extends SelectionTask>(tasks:T[],weeks:number,options:{ignoreTail?:boolean;examWeeks?:Set<number>}={}){
+  const examWeeks=options.examWeeks??new Set([weeks]);
   const result:{start:number;span:number;tasks:T[];tail:boolean;exam:boolean;key:string}[]=[];
   for(let week=1;week<=weeks;week++){
     const active=tasks.filter(t=>t.start_week&&week>=t.start_week&&week<=t.end_week).sort((a,b)=>a.id-b.id);
-    const tail=(t:T)=>Boolean(t.tail_weeks&&week>t.end_week-t.tail_weeks);
-    const exam=!active.length&&week>weeks-1;
+    const tail=(t:T)=>Boolean(!options.ignoreTail&&t.tail_weeks&&week>t.end_week-t.tail_weeks);
+    const exam=!active.length&&examWeeks.has(week);
     const key=active.map(t=>`${t.id}:${tail(t)?'tail':'normal'}`).join(',')+(exam?':exam':'');
     const previous=result.at(-1);
     if(previous?.key===key)previous.span++;

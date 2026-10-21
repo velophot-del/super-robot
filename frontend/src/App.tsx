@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate, Outlet, Link } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, Outlet, Link, useLocation } from 'react-router-dom';
 import { ConfigProvider, App as AntApp, Spin, Result, Button } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import theme from './theme';
@@ -11,15 +11,12 @@ import TeachersPage from './pages/DataManagement/TeachersPage';
 import CoursesPage from './pages/DataManagement/CoursesPage';
 import ClassroomsPage from './pages/DataManagement/ClassroomsPage';
 import ImportPage from './pages/DataManagement/ImportPage';
-import ConstraintsPage from './pages/Scheduling/ConstraintsPage';
-import EnginePage from './pages/Scheduling/EnginePage';
-import ConflictsPage from './pages/Scheduling/ConflictsPage';
-import TimetableView from './pages/TimetableView';
-import ExportPage from './pages/ExportPage';
+import AdminHistoryPage from './pages/AdminHistoryPage';
+import TeacherMatchPage from './pages/TeacherMatchPage';
+import TeacherTimetablePage from './pages/TeacherTimetablePage';
 import Login from './pages/Login';
-import Register from './pages/Register';
 import DebugPage from './pages/DebugPage';
-import { can } from './lib/accessPolicy';
+import { can, requiresAccountSetup } from './lib/accessPolicy';
 import PlanningWorkspace, { ManagementPlanningWorkspace } from './pages/PlanningWorkspace';
 import TeacherProfilePage from './pages/TeacherProfilePage';
 import CurriculumMaterialsPage from './pages/CurriculumMaterialsPage';
@@ -32,7 +29,12 @@ function ManagementRoute() {
 
 function ReviewWorkspaceRoute(){
   const {user}=useAuth();
-  return can(user,'admin')||can(user,'review')||can(user,'publish')?<ManagementPlanningWorkspace/>:<Result status="403" title="无权访问管理审核工作台"/>;
+  return can(user,'admin')||can(user,'review')||can(user,'publish')?<ManagementPlanningWorkspace section="review"/>:<Result status="403" title="无权访问管理审核工作台"/>;
+}
+
+function TimetableRoute(){
+  const {user}=useAuth();
+  return can(user,'admin')?<AdminHistoryPage/>:can(user,'teaching')?<TeacherTimetablePage/>:<Result status="403" title="无权访问历史课表"/>;
 }
 
 function WorkspaceHome() {
@@ -43,6 +45,7 @@ function WorkspaceHome() {
 // 路由守卫：未登录重定向到登录页
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
+  const location = useLocation();
 
   if (loading) {
     return (
@@ -56,6 +59,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
     return <Navigate to="/login" replace />;
   }
 
+  if (requiresAccountSetup(user) && location.pathname !== '/profile') return <Navigate to="/profile" replace />;
   return <>{children}</>;
 }
 
@@ -68,7 +72,7 @@ export default function App() {
             <Routes>
               {/* 公开路由 */}
               <Route path="/login" element={<Login />} />
-              <Route path="/register" element={<Register />} />
+              <Route path="/register" element={<Navigate to="/login" replace />} />
               <Route path="/debug" element={<DebugPage />} />
 
               {/* 受保护路由（需要登录） */}
@@ -81,6 +85,7 @@ export default function App() {
               >
                 <Route path="/" element={<WorkspaceHome />} />
                 <Route path="/planning" element={<PlanningWorkspace />} />
+                <Route path="/planning/matches" element={<TeacherMatchPage />} />
                 <Route path="/planning/review" element={<ReviewWorkspaceRoute />} />
                 <Route path="/profile" element={<TeacherProfilePage />} />
                 <Route element={<ManagementRoute />}>
@@ -90,12 +95,9 @@ export default function App() {
                 <Route path="/data/courses" element={<CoursesPage />} />
                 <Route path="/data/classrooms" element={<ClassroomsPage />} />
                 <Route path="/data/import" element={<ImportPage />} />
-                <Route path="/schedule/constraints" element={<ConstraintsPage />} />
-                <Route path="/schedule/engine" element={<EnginePage />} />
-                <Route path="/schedule/conflicts" element={<ConflictsPage />} />
-                <Route path="/export" element={<ExportPage />} />
                 </Route>
-                <Route path="/timetable" element={<TimetableView />} />
+                <Route path="/timetable" element={<TimetableRoute />} />
+                <Route path="*" element={<Navigate to="/planning" replace />} />
               </Route>
             </Routes>
           </BrowserRouter>

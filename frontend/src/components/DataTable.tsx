@@ -1,5 +1,5 @@
 // 通用数据管理表格组件
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Table, Button, Space, Input, Modal, Form, message, Popconfirm, Typography } from 'antd';
 import { PlusOutlined, SearchOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 
@@ -16,11 +16,14 @@ interface DataTableProps {
     update: (id: number, data: any) => Promise<any>;
     delete: (id: number) => Promise<any>;
   };
+  filterData?: (rows: any[]) => any[];
   extraFilters?: React.ReactNode;
   extraRowActions?: (record: any) => React.ReactNode;
 }
 
-export default function DataTable({ title, columns, formFields, api, extraFilters, extraRowActions }: DataTableProps) {
+export default function DataTable({ title, columns, formFields, api, extraFilters, extraRowActions, filterData }: DataTableProps) {
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
@@ -43,8 +46,18 @@ export default function DataTable({ title, columns, formFields, api, extraFilter
 
   useEffect(() => { loadData(); }, []);
 
+  useEffect(() => { setPage(1); }, [filterData]);
+
+  const rows = useMemo(() => filterData ? filterData(data) : data, [data, filterData]);
+  // 服务端搜索或删除后数据量可能变小，受控页码需要回到有效范围内。
+  useEffect(() => {
+    const pages = Math.max(1, Math.ceil(rows.length / pageSize));
+    if (page > pages) setPage(pages);
+  }, [rows.length, pageSize, page]);
+
   const handleSearch = (value: string) => {
     setSearch(value);
+    setPage(1);
     loadData(value);
   };
 
@@ -129,11 +142,20 @@ export default function DataTable({ title, columns, formFields, api, extraFilter
       </div>
 
       <Table
-        dataSource={data}
+        dataSource={rows}
         columns={[...columns, actionColumn]}
         rowKey="id"
         loading={loading}
-        pagination={{ pageSize: 50, showSizeChanger: true, showTotal: (t) => `共 ${t} 条` }}
+        pagination={{
+          current: page,
+          pageSize,
+          onChange: (nextPage, nextSize) => {
+            if (nextSize !== pageSize) setPageSize(nextSize);
+            setPage(nextSize !== pageSize ? 1 : nextPage);
+          },
+          showSizeChanger: true,
+          showTotal: (t) => `共 ${t} 条`,
+        }}
         scroll={{ x: 900 }}
         style={{ border: '1px solid #e3e8ee', borderRadius: 8 }}
       />

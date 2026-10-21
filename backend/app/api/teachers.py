@@ -8,6 +8,8 @@ from app.models.teacher import Teacher
 from app.models.schedule import ScheduleEntry
 from app.models.course import Course
 from app.models.class_info import ClassInfo
+from app.models.planning import TeacherProfile
+from app.services.course_library import professional_courses
 from app.schemas.teacher import TeacherCreate, TeacherUpdate, TeacherResponse
 
 router = APIRouter(prefix="/api/teachers", tags=["教师管理"])
@@ -93,7 +95,28 @@ def get_teacher_courses(teacher_id: int, version: str = Query(None), db: Session
     }
 
 
-@router.get("/{teacher_id}", response_model=TeacherResponse, summary="获取教师详情")
+def _course_summary(course):
+    return {'id': course.id, 'name': course.name, 'course_code': course.course_code,
+            'department': course.department, 'course_type': course.course_type}
+
+
+@router.get("/{teacher_id}/course-affiliations", summary="查看教师课程组与课程负责人")
+def get_teacher_course_affiliations(teacher_id: int, db: Session = Depends(get_db)):
+    """打通教师个人资料与课程管理：只读展示参与课程组及本人负责的专业课程。"""
+    teacher = db.query(Teacher).filter(Teacher.id == teacher_id).first()
+    if not teacher:
+        raise HTTPException(status_code=404, detail="教师不存在")
+    professional = {course.id: course for course in professional_courses(db)}
+    profile = db.get(TeacherProfile, teacher_id)
+    own = (profile.payload.get('self_profile') or {}) if profile else {}
+    group_ids = [int(cid) for cid in (own.get('participating_course_ids') or []) if str(cid).isdigit()]
+    course_groups = [_course_summary(professional[cid]) for cid in dict.fromkeys(group_ids) if cid in professional]
+    leader_courses = [_course_summary(course) for course in professional.values()
+                      if course.leader_teacher_id == teacher_id]
+    leader_courses.sort(key=lambda course: (course['name'], course['course_code']))
+    return {'teacher_id': teacher.id, 'teacher_name': teacher.name,
+            'profile_updated': bool(own), 'course_groups': course_groups,
+            'leader_courses': leader_courses}
 def get_teacher(teacher_id: int, db: Session = Depends(get_db)):
     teacher = db.query(Teacher).filter(Teacher.id == teacher_id).first()
     if not teacher:

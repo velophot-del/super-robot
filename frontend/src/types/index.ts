@@ -7,6 +7,8 @@ export interface UserInfo {
   role?: 'user' | 'admin' | 'teacher';
   teacher_id?: number | null;
   is_demo?: boolean;
+  password_change_required?: boolean;
+  profile_required?: boolean;
   grants?: { capability: string; scope: string; scope_id: string }[];
 }
 
@@ -74,6 +76,9 @@ export interface Course {
   remarks?: string;
   created_at: string;
   updated_at: string;
+  leader_teacher_id?: number | null;
+  leader_teacher_name?: string | null;
+  leader_teacher_code?: string | null;
 }
 
 export interface Classroom {
@@ -123,6 +128,22 @@ export interface TeacherCourseInfo {
   total_hours?: number;
   class_name: string;
   time_slots: number;
+}
+
+export interface TeacherCourseAffiliationItem {
+  id: number;
+  name: string;
+  course_code: string;
+  department?: string | null;
+  course_type?: string | null;
+}
+
+export interface TeacherCourseAffiliations {
+  teacher_id: number;
+  teacher_name: string;
+  profile_updated: boolean;
+  course_groups: TeacherCourseAffiliationItem[];
+  leader_courses: TeacherCourseAffiliationItem[];
 }
 
 export interface TeacherCoursesResponse {

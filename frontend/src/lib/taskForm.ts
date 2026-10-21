@@ -1,0 +1,13 @@
+export function taskLimitsPayload(values:Record<string,any>,revision:number){
+  return {revision,teacher_count:values.teacher_count,max_students:values.max_students};
+}
+
+export function taskCourseInfo(task:any){
+  const imported=task?.source?.course_metadata||{};
+  return {
+    name:imported.name??task?.name,code:imported.code??task?.code,
+    credits:imported.credits??task?.credits,required_hours:imported.required_hours??task?.required_hours,
+    category:imported.category??task?.category,department:task?.source?.major??task?.department,
+    group:task?.group,
+  };
+}

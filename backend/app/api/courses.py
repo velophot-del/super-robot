@@ -45,11 +45,12 @@ def create_course(data: CourseCreate, db: Session = Depends(get_db)):
     existing = db.query(Course).filter(Course.course_code == data.course_code).first()
     if existing:
         raise HTTPException(status_code=400, detail=f"课程编码'{data.course_code}'已存在")
+    validate_leader(db,data.leader_teacher_id)
     course = Course(**data.model_dump())
     db.add(course)
     db.commit()
     db.refresh(course)
-    return course
+    return attach_sources(db,[course])[0]
 
 
 @router.put("/{course_id}", response_model=CourseResponse, summary="更新课程")
@@ -58,11 +59,12 @@ def update_course(course_id: int, data: CourseUpdate, db: Session = Depends(get_
     if not course:
         raise HTTPException(status_code=404, detail="课程不存在")
     update_data = data.model_dump(exclude_unset=True)
+    if 'leader_teacher_id' in update_data:validate_leader(db,data.leader_teacher_id)
     for key, value in update_data.items():
         setattr(course, key, value)
     db.commit()
     db.refresh(course)
-    return course
+    return attach_sources(db,[course])[0]
 
 
 @router.delete("/{course_id}", summary="删除课程")
@@ -84,3 +86,9 @@ def delete_course(course_id: int, db: Session = Depends(get_db)):
     db.delete(course)
     db.commit()
     return {"ok": True, "message": f"课程「{course.name}」已删除"}
+
+
+def validate_leader(db, teacher_id):
+    from app.models.teacher import Teacher
+    if teacher_id is not None and not db.get(Teacher, teacher_id):
+        raise HTTPException(422,'课程负责人不存在，请重新选择教师')

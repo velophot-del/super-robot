@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
-  Card, Select, Space, Typography, Tabs, Button, Spin, Empty, Tooltip
+  Alert, Card, Select, Space, Typography, Tabs, Button, Spin, Empty, Tooltip
 } from 'antd';
 import {
   TeamOutlined, UserOutlined, BankOutlined,
@@ -22,11 +22,11 @@ const COLORS = [
   '#8b5cf6', '#06b6d4', '#84cc16', '#f97316', '#ec4899',
 ];
 
-export default function TimetableView() {
+export default function TimetableView({versionOverride}:{versionOverride?:string}={}) {
   const { user } = useAuth();
   const teacherView = can(user,'teaching');
   const [searchParams] = useSearchParams();
-  const versionParam = searchParams.get('version') || undefined;
+  const versionParam = versionOverride || searchParams.get('version') || undefined;
 
   const [entries, setEntries] = useState<ScheduleEntry[]>([]);
   const [viewType, setViewType] = useState<'class' | 'teacher' | 'classroom'>(teacherView ? 'teacher' : 'class');
@@ -34,9 +34,10 @@ export default function TimetableView() {
   const [selectedGroup, setSelectedGroup] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [weekNumber, setWeekNumber] = useState(1);
+  const [loadError,setLoadError]=useState('');
 
   const loadData = useCallback(async () => {
-    setLoading(true);
+    setLoading(true);setLoadError('');
     try {
       const res: any = await (teacherView ? scheduleApi.myList : scheduleApi.list)({ limit: 2000, version: versionParam });
       const data = (res || []) as ScheduleEntry[];
@@ -48,7 +49,8 @@ export default function TimetableView() {
       const uniqueGroups = [...new Set(data.map(e => (e as any)[field] || ''))].filter(Boolean).sort();
       setGroups(uniqueGroups);
       setSelectedGroup(current => uniqueGroups.includes(current) ? current : (uniqueGroups[0] || ''));
-    } catch {
+    } catch(e) {
+      setLoadError(e instanceof Error?e.message:'读取课表失败，请重试');
       setEntries([]);
       setGroups([]);
     } finally {
@@ -89,9 +91,9 @@ export default function TimetableView() {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
-        <Title level={4} style={{ margin: 0, color: '#0d253d' }}>{teacherView ? '我的课表' : '课表视图'}</Title>
+        <Title level={4} style={{ margin: 0, color: '#0d253d' }}>{teacherView ? (versionOverride?'历史课表':'我的课表') : '课表视图'}</Title>
         <Space wrap>
-          <Tabs
+          {!teacherView&&<Tabs
             activeKey={viewType}
             onChange={(v) => { setViewType(v as any); setSelectedGroup(''); }}
             items={[
@@ -100,7 +102,7 @@ export default function TimetableView() {
               { key: 'classroom', label: <span><BankOutlined /> 按教室</span> },
             ]}
             style={{ marginBottom: 0 }}
-          />
+          />}
           <Select
             showSearch
             value={selectedGroup || undefined}
@@ -118,10 +120,11 @@ export default function TimetableView() {
         </Space>
       </div>
 
+      {loadError&&<Alert type="error" showIcon title={loadError}/>}
       <Spin spinning={loading}>
         {filteredEntries.length === 0 ? (
           <Card bordered style={{ borderColor: '#e3e8ee' }}>
-            <Empty description="暂无排课数据，请先执行排课生成课表" />
+            <Empty description={loadError?'课表读取失败':teacherView?'本周暂无本人授课安排':'暂无排课数据，请先执行排课生成课表'} />
           </Card>
         ) : (
           <Card bordered style={{ borderColor: '#e3e8ee', padding: 0 }} bodyStyle={{ padding: 10 }}>
