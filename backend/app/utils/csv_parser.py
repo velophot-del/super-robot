@@ -1,6 +1,7 @@
 """CSV模板解析工具 - 支持批量导入排课实体数据"""
 import csv
 import io
+import re
 from typing import List, Dict, Any, Tuple
 
 
@@ -35,8 +36,8 @@ CSV_TEMPLATES = {
         }
     },
     "courses": {
-        "required_fields": ["name", "course_code", "semester", "semester_sessions"],
-        "optional_fields": ["course_type", "course_nature", "cohort", "teaching_weeks", "tail_hours", "weekly_sessions", "hours_per_session", "total_hours",
+        "required_fields": ["name", "course_code", "semester", "total_hours"],
+        "optional_fields": ["course_type", "course_nature", "cohort", "teaching_weeks", "tail_hours", "weekdays",
                           "credits", "requires_consecutive",
                           "requires_lab", "priority", "department", "remarks", "leader_teacher_code", "offering_unit_code"],
         "field_names": {
@@ -50,9 +51,7 @@ CSV_TEMPLATES = {
             "tail_hours": "尾周学时",
             "leader_teacher_code": "课程负责人（工号）",
             "offering_unit_code": "开课单位编码",
-            "semester_sessions": "学期教学次数",
-            "weekly_sessions": "每周上课次数",
-            "hours_per_session": "每次课时",
+            "weekdays": "每周上课日",
             "total_hours": "总课时",
             "credits": "学分",
             "requires_consecutive": "需连排",
@@ -166,6 +165,28 @@ def parse_csv_content(content: str, entity_type: str, overrides: dict | None = N
     return data_rows, errors
 
 
+_WEEKDAY_CHARS = {'一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '日': 7, '天': 7}
+
+
+def _parse_weekdays(value: Any) -> List[int]:
+    """解析每周上课日：支持“周一,周三”“星期一、星期五”“1,3”等写法。"""
+    if value is None or value == '':
+        return []
+    parts = list(value) if isinstance(value, (list, tuple, set)) else re.split(r'[,，、;；/\s]+', str(value).strip())
+    days = set()
+    for part in parts:
+        text = str(part).strip()
+        if not text:
+            continue
+        if not any(char in _WEEKDAY_CHARS for char in text):
+            days.update(int(digit) for digit in re.findall(r'[1-7]', text))
+            continue
+        match = re.search(r'([一二三四五六日天])', text)
+        if match:
+            days.add(_WEEKDAY_CHARS[match.group(1)])
+    return sorted(days)
+
+
 def _convert_field_value(field: str, value: Any) -> Any:
     """转换字段值到正确的类型"""
     if value is None or value == "":
@@ -175,8 +196,10 @@ def _convert_field_value(field: str, value: Any) -> Any:
     if field == 'credits':
         try:return float(value)
         except (ValueError,TypeError):return value
-    if field in ("student_count", "max_weekly_hours", "semester_sessions",
-                 "semester", "teaching_weeks", "tail_hours", "weekly_sessions", "hours_per_session", "total_hours",
+    if field == 'weekdays':
+        return _parse_weekdays(value)
+    if field in ("student_count", "max_weekly_hours",
+                 "semester", "teaching_weeks", "tail_hours", "total_hours",
                  "priority", "capacity", "floor"):
         try:
             return int(value)
@@ -236,8 +259,9 @@ def _get_example_data(entity_type: str) -> Dict[str, Any]:
             "phone": "13800001001", "max_weekly_hours": "16", "remarks": "示范数据"
         },
         "courses": {
-            "name": "数据结构", "course_code": "CS201", "semester": "2", "cohort": "2026", "teaching_weeks": "16", "tail_hours": "", "course_type": "专业课", "course_nature": "必修课",
-            "semester_sessions": "16", "weekly_sessions": "1", "hours_per_session": "2",
+            "name": "数据结构", "course_code": "CS201", "semester": "2", "cohort": "2026",
+            "teaching_weeks": "16", "tail_hours": "", "weekdays": "周一,周三",
+            "course_type": "专业课", "course_nature": "必修课",
             "total_hours": "32", "credits": "4",
             "requires_consecutive": "否", "requires_lab": "否",
             "priority": "5", "department": "计算机科学", "remarks": "示范数据"

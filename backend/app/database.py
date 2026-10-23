@@ -55,54 +55,48 @@ def _migrate_teacher_columns(engine):
 
 
 def _migrate_course_columns(engine):
-    """SQLite 兼容迁移：重命名 weekly_hours → semester_sessions + 新增列"""
-    import sqlite3
-    from sqlalchemy import text, inspect
+    """SQLite 兼容迁移：新增每周上课日，删除旧次数/课时列并回填授课周数。"""
+    from sqlalchemy import text
 
     # 仅 SQLite 需要手动迁移
     if "sqlite" not in str(engine.url):
         return
 
-    with engine.connect() as conn:
-        # 获取现有列名
+    with engine.begin() as conn:
         existing = {row[1] for row in conn.execute(text("PRAGMA table_info(courses)")).fetchall()}
 
-        # 1. 如果旧列 weekly_hours 存在且新列 semester_sessions 不存在，执行重命名
-        if "weekly_hours" in existing and "semester_sessions" not in existing:
-            try:
-                conn.execute(text("ALTER TABLE courses RENAME COLUMN weekly_hours TO semester_sessions"))
-                conn.commit()
-                existing.discard("weekly_hours")
-                existing.add("semester_sessions")
-            except Exception:
-                pass  # 忽略迁移错误（列可能已被其他方式处理）
+        # 1. 新增每周固定上课日
+        if "weekdays" not in existing:
+            conn.execute(text("ALTER TABLE courses ADD COLUMN weekdays JSON NOT NULL DEFAULT '[]'"))
+            existing.add("weekdays")
 
-        # 2. 新增 weekly_sessions 列
-        if "weekly_sessions" not in existing:
-            try:
-                conn.execute(text("ALTER TABLE courses ADD COLUMN weekly_sessions INTEGER NOT NULL DEFAULT 1"))
-                conn.commit()
-            except Exception:
-                pass
+        # 2. 授课周数：旧数据仅有次数时，先按次数÷每周次数回填
+        if "teaching_weeks" not in existing:
+            conn.execute(text("ALTER TABLE courses ADD COLUMN teaching_weeks INTEGER"))
+            existing.add("teaching_weeks")
+        if {"semester_sessions", "weekly_sessions"} <= existing:
+            conn.execute(text("""
+                UPDATE courses SET teaching_weeks =
+                    MAX(1, CAST((semester_sessions + weekly_sessions - 1) / weekly_sessions AS INTEGER))
+                WHERE teaching_weeks IS NULL AND semester_sessions IS NOT NULL AND weekly_sessions > 0
+            """))
 
-        # 3. 新增 hours_per_session 列
-        if "hours_per_session" not in existing:
-            try:
-                conn.execute(text("ALTER TABLE courses ADD COLUMN hours_per_session INTEGER NOT NULL DEFAULT 2"))
-                conn.commit()
-            except Exception:
-                pass
+        # 3. 彻底删除不再使用的次数/课时列
+        for column in ("semester_sessions", "weekly_sessions", "hours_per_session", "weekly_hours"):
+            if column in existing:
+                try:
+                    conn.execute(text(f"ALTER TABLE courses DROP COLUMN {column}"))
+                    existing.discard(column)
+                except Exception:
+                    pass  # 旧版 SQLite 不支持 DROP COLUMN 时保留列，代码不再引用
 
         # Existing courses retain a null leader until an administrator explicitly assigns one.
         if "leader_teacher_id" not in existing:
             conn.execute(text("ALTER TABLE courses ADD COLUMN leader_teacher_id INTEGER REFERENCES teachers(id) ON DELETE SET NULL"))
-            conn.commit()
         if "course_nature" not in existing:
             conn.execute(text("ALTER TABLE courses ADD COLUMN course_nature VARCHAR(20) NOT NULL DEFAULT '必修课'"))
-            conn.commit()
         if "semester" not in existing:
             conn.execute(text("ALTER TABLE courses ADD COLUMN semester INTEGER"))
-            conn.commit()
         if "course_type" in existing:
             conn.execute(text("""UPDATE courses SET
                 course_nature=CASE
@@ -118,7 +112,6 @@ def _migrate_course_columns(engine):
                     WHEN course_type LIKE '%实践%' THEN '综合实践课'
                     WHEN course_type LIKE '%公共%' OR course_type LIKE '%通识%' THEN '学科通识课'
                     ELSE '专业课' END"""))
-            conn.commit()
 
 
 def _migrate_class_columns(engine):

@@ -25,7 +25,7 @@ class DownloadTests(unittest.IsolatedAsyncioTestCase):
         self.db.add_all([
             ClassInfo(name='视传2601', grade='2026', department='Design', student_count=30),
             Course(name='构成设计', course_code='C1', semester=2, teaching_weeks=8,
-                   semester_sessions=16, weekly_sessions=2),
+                   total_hours=64, weekdays=[1, 3]),
             Classroom(name='Room A', room_code='R1', capacity=40),
         ])
         self.db.commit()

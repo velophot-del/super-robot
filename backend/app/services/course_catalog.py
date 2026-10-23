@@ -1,4 +1,6 @@
 """课程库到当前排课周期的适用范围解析。"""
+import math
+
 from app.models.class_info import ClassInfo
 from app.models.course import Course
 from app.services.academic_scope import (
@@ -51,12 +53,35 @@ def course_catalog_scope(db, start_date, term, allowed_groups=None, major=None, 
     return scope
 
 
+def course_weekdays(course):
+    """课程固定的每周上课日，去重并限制在周一至周日。"""
+    days = []
+    for value in course.weekdays or []:
+        try:
+            day = int(value)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= day <= 7 and day not in days:
+            days.append(day)
+    return sorted(days)
+
+
 def effective_teaching_weeks(course):
-    """课程授课周数：优先使用教学计划值；缺失时按学期次数÷每周次数向上取整。"""
+    """课程授课周数：优先使用教学计划值；缺失时按总学时÷每周上课日（每天2节）推算。"""
     if course.teaching_weeks:
         return course.teaching_weeks
-    weekly = max(course.weekly_sessions or 1, 1)
-    return max(1, ((course.semester_sessions or 0) + weekly - 1) // weekly)
+    days = len(course_weekdays(course)) or 1
+    total = course.total_hours or 0
+    return max(1, math.ceil(total / (days * 2))) if total else 1
+
+
+def course_schedule_info(course):
+    """课程的授课周数、每周上课日、计划总学时与周均学时。"""
+    days = course_weekdays(course)
+    weeks = effective_teaching_weeks(course)
+    total = course.total_hours or weeks * max(len(days), 1) * 2
+    return {'teaching_weeks': weeks, 'weekdays': days, 'total_hours': total,
+            'weekly_hours': math.ceil(total / weeks) if weeks else total}
 
 
 def course_pool_rows(scope):
@@ -66,6 +91,7 @@ def course_pool_rows(scope):
         group = item['class']
         semester = item['semester']
         for course in item['courses']:
+            info = course_schedule_info(course)
             rows.append({
                 'id': course.id,
                 'document_id': None,
@@ -76,11 +102,12 @@ def course_pool_rows(scope):
                 'name': course.name,
                 'code': course.course_code,
                 'credits': course.credits,
-                'required_hours': course.total_hours or course.semester_sessions * course.hours_per_session,
+                'required_hours': info['total_hours'],
                 'course_type': course.course_type,
                 'course_nature': course.course_nature,
-                'teaching_weeks': effective_teaching_weeks(course),
-                'weekly_hours': course.weekly_sessions * course.hours_per_session,
+                'teaching_weeks': info['teaching_weeks'],
+                'weekdays': info['weekdays'],
+                'weekly_hours': info['weekly_hours'],
                 'tail_hours': course.tail_hours,
                 'direction': '',
                 'tags': [],

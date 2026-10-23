@@ -10,6 +10,7 @@ import DataTable from '../../components/DataTable';
 import { ImportButton } from '../../components/DataImport';
 import { teacherApi } from '../../api/client';
 import { downloadDataset } from '../../lib/download';
+import { weekdayLabel } from '../../lib/weekdays';
 import type { TeacherCoursesResponse, TeacherCourseInfo, TeacherCourseAffiliations } from '../../types';
 
 const { Text } = Typography;
@@ -66,9 +67,9 @@ export default function TeachersPage() {
     { title: '课程名称', dataIndex: 'course_name', key: 'course_name', width: 130 },
     { title: '课程编码', dataIndex: 'course_code', key: 'course_code', width: 90 },
     { title: '授课班级', dataIndex: 'class_name', key: 'class_name', width: 100, render: (v: string) => <Tag color="purple">{v}</Tag> },
-    { title: '学期次数', dataIndex: 'semester_sessions', key: 'semester_sessions', width: 65 },
-    { title: '周次数', dataIndex: 'weekly_sessions', key: 'weekly_sessions', width: 55 },
-    { title: '每次课时', dataIndex: 'hours_per_session', key: 'hours_per_session', width: 65 },
+    { title: '授课周数', dataIndex: 'teaching_weeks', key: 'teaching_weeks', width: 65 },
+    { title: '每周上课日', dataIndex: 'weekdays', key: 'weekdays', width: 110, render: (days: number[]) => weekdayLabel(days) || '未设置' },
+    { title: '周均学时', dataIndex: 'weekly_hours', key: 'weekly_hours', width: 65 },
     { title: '总课时', dataIndex: 'total_hours', key: 'total_hours', width: 55, render: (v: number | null) => v ?? '-' },
     { title: '周排课次数', dataIndex: 'time_slots', key: 'time_slots', width: 75 },
   ];

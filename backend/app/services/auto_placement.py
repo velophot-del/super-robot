@@ -26,10 +26,11 @@ def _chunks(hours,unit,consecutive):
     return sizes
 
 
-def _patterns(hours,unit,consecutive,limit=32):
+def _patterns(hours,unit,consecutive,days=None,limit=32):
     sizes=_chunks(hours,unit,consecutive)
     if not sizes:return []
-    candidates=[[(day,start,size) for day in range(1,6) for start in range(1,10-size)] for size in sizes]
+    allowed=sorted({day for day in (days or []) if isinstance(day,int) and 1<=day<=7}) or [1,2,3,4,5]
+    candidates=[[(day,start,size) for day in allowed for start in range(1,10-size)] for size in sizes]
     found=[];nodes=0
     def visit(index,chosen):
         nonlocal nodes
@@ -75,8 +76,9 @@ def _task_patterns(task):
         raise ValueError('周课时、尾周学时与总学时不一致')
     unit=_int(metadata.get('hours_per_session')) or 2
     consecutive=bool(metadata.get('requires_consecutive') or task.get('requires_consecutive'))
-    normal_patterns=_patterns(weekly,unit,consecutive) if normal_weeks else [()]
-    tail_patterns=_patterns(tail or 0,unit,consecutive) if tail_weeks and tail else [()]
+    days=metadata.get('weekdays') or task.get('weekdays') or []
+    normal_patterns=_patterns(weekly,unit,consecutive,days) if normal_weeks else [()]
+    tail_patterns=_patterns(tail or 0,unit,consecutive,days) if tail_weeks and tail else [()]
     if not normal_patterns or not tail_patterns:raise ValueError('周课时无法拆分为每天1至8节的可排时段')
     return [tuple([*normal,*tail]) for normal,tail in product(normal_patterns,tail_patterns)][:128],normal_weeks,tail_weeks
 

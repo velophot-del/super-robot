@@ -11,11 +11,11 @@ class CourseXlsxImportTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_preview_is_read_only_and_confirmation_imports_only_valid_new_rows_once(self):
         wb=Workbook();one=wb.active;one.title='课程表A'
-        one.append(['课程名称','课程编码','上课学期','学期教学次数','课程类型','课程性质'])
-        one.append(['构成设计','A101',1,16,'专业课','必修课'])
-        one.append(['错误学期','BAD',13,16,'专业课','必修课'])
-        two=wb.create_sheet('课程表B');two.append(['课程名称','课程编码','上课学期','学期教学次数'])
-        two.append(['重复课程','A101',2,16])
+        one.append(['课程名称','课程编码','上课学期','总课时','课程类型','课程性质'])
+        one.append(['构成设计','A101',1,32,'专业课','必修课'])
+        one.append(['错误学期','BAD',13,32,'专业课','必修课'])
+        two=wb.create_sheet('课程表B');two.append(['课程名称','课程编码','上课学期','总课时'])
+        two.append(['重复课程','A101',2,32])
         out=BytesIO();wb.save(out)
         headers={'Authorization':'Bearer '+(await self.client.post('/api/debug/session',json={'role':'admin'})).json()['access_token']}
         preview=await self.client.post('/api/io/xlsx/courses/preview',headers=headers,

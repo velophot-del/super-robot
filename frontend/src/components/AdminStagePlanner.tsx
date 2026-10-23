@@ -5,6 +5,7 @@ import { planningApi as api } from '../api/planning';
 import { weekDates } from '../lib/selectionGrid';
 import { examWeeksFor } from '../lib/examWeeks';
 import { matchesStageScope, normalizeCohort, stageClassScope, stageLanes, stageRowMetrics, stageTaskEditAction, stageRoomLabel,dropWeek } from '../lib/adminStageGrid';
+import { weekdayLabel } from '../lib/weekdays';
 
 type DragItem={course_id?:number;task_id?:number;duration?:number};
 const MIME='application/x-college-stage';
@@ -169,7 +170,7 @@ export default function AdminStagePlanner({plan,classes=[],onChange,onEdit}:{pla
           return <div key={`${course.id}:${course.cohort}:${course.major}`} draggable={editable&&!busy&&schedulable} onDragStart={e=>drag(e,item)} style={{border:`1px solid ${selected?.course_id===course.id?'#436684':'#e4e1ed'}`,background:'#f8f9fb',borderRadius:6,padding:10,marginBottom:10,cursor:editable&&schedulable?'grab':'default'}}>
             <Typography.Text strong>{course.name}</Typography.Text><Button size="small" style={{display:'block',marginTop:5,touchAction:'none',cursor:'grab'}} disabled={!editable||busy||!schedulable} aria-label={`拖拽放置 ${course.name}`} onPointerDown={e=>beginPointer(e,item,course.name)} onPointerMove={e=>{if(pointer.current)setGhost({x:e.clientX,y:e.clientY,name:pointer.current.name});}} onPointerUp={endPointer} onPointerCancel={()=>{pointer.current=null;setGhost(undefined);}}>拖拽放置</Button>
             {course.major&&<div style={{fontSize:11,color:'#436684',marginTop:4}}>{course.major} · {normalizeCohort(course.cohort)}级 · 第{course.semester}学期</div>}
-            <div style={{fontSize:12,margin:'4px 0'}}>{course.credits}学分 · {course.required_hours}学时 · {course.weekly_hours??'未注明'}节/周 · 教学计划 {weeks??'待补录'} 周</div>
+            <div style={{fontSize:12,margin:'4px 0'}}>{course.credits}学分 · {course.required_hours}学时 · {course.weekly_hours??'未注明'}节/周 · 教学计划 {weeks??'待补录'} 周{course.weekdays?.length?` · ${weekdayLabel(course.weekdays)}`:''}</div>
             <Space wrap><Button size="small" disabled={!editable||busy||!schedulable} onClick={()=>{setSelected(item);message.info('请点击班级行中的起始周');}}>选择放置</Button></Space>
             {!schedulable&&<div style={{fontSize:11,color:'#e5484d',marginTop:4}}>课程库未提供授课周数，请先在课程数据中补齐</div>}
             {course.notes&&<Typography.Paragraph type="secondary" style={{fontSize:11,margin:'5px 0 0'}}>{course.notes}</Typography.Paragraph>}

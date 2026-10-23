@@ -99,23 +99,35 @@ class ValidationService:
         if not valid_semester:
             self.errors.append({"field": "semester", "message": "上课学期须填写1至12"})
 
-        # 课时合理性
-        if data.get("semester_sessions"):
-            sessions = int(data["semester_sessions"])
-            if sessions > 32:
-                self.warnings.append({
-                    "field": "semester_sessions",
-                    "message": f"学期教学次数({sessions})较多，建议检查课程设置是否合理",
-                    "severity": "medium"
-                })
-        if data.get("weekly_sessions"):
-            weekly = int(data["weekly_sessions"])
-            if weekly >= 3 and not data.get("requires_consecutive"):
-                self.warnings.append({
-                    "field": "weekly_sessions",
-                    "message": f"每周上课{weekly}次，建议考虑设置连排以优化教学效果",
-                    "severity": "low"
-                })
+        # 计划总学时与上课日
+        try:
+            total_hours = int(data.get("total_hours") or 0)
+        except (TypeError, ValueError):
+            total_hours = 0
+        if total_hours <= 0:
+            self.errors.append({"field": "total_hours", "message": "计划总学时必须大于0"})
+        elif total_hours > 400:
+            self.warnings.append({
+                "field": "total_hours",
+                "message": f"计划总学时({total_hours})较大，建议检查课程设置是否合理",
+                "severity": "medium"
+            })
+        if data.get("teaching_weeks") is not None:
+            try:
+                weeks = int(data["teaching_weeks"])
+                if not 1 <= weeks <= 20:
+                    self.errors.append({"field": "teaching_weeks", "message": "授课周数须为1至20"})
+            except (TypeError, ValueError):
+                self.errors.append({"field": "teaching_weeks", "message": "授课周数须为整数"})
+        weekdays = data.get("weekdays") or []
+        if not weekdays:
+            self.warnings.append({
+                "field": "weekdays",
+                "message": "未设置每周上课日，自动排课将使用默认周一至周五",
+                "severity": "low"
+            })
+        elif any(not isinstance(day, int) or day < 1 or day > 7 for day in weekdays):
+            self.errors.append({"field": "weekdays", "message": "每周上课日须为1至7（周一至周日）"})
 
         # 课程类型与学分匹配
         if data.get("course_type") == "必修" and int(data.get("credits", 2)) <= 0:

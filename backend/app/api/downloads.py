@@ -19,7 +19,7 @@ from app.models.schedule import ScheduleEntry
 from app.models.teacher import Teacher
 from app.services.auth import require_user
 from app.services.authorization import check
-from app.services.course_catalog import effective_teaching_weeks
+from app.services.course_catalog import course_schedule_info
 from app.services.schedule_versions import resolve_schedule_version
 
 router = APIRouter(prefix='/api/downloads', tags=['数据下载'])
@@ -35,6 +35,10 @@ DATASETS = {
 
 DAY_NAMES = {1: '周一', 2: '周二', 3: '周三', 4: '周四', 5: '周五', 6: '周六', 7: '周日'}
 XLSX_MEDIA = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+
+
+def _weekdays_text(days):
+    return '、'.join(DAY_NAMES[day] for day in days if day in DAY_NAMES)
 
 
 def _fill_sheet(ws, title, headers, rows):
@@ -81,10 +85,11 @@ def _course_rows(db):
     leaders = {row.id: row.name for row in db.query(Teacher)}
     rows = []
     for row in db.query(Course).order_by(Course.id):
+        info = course_schedule_info(row)
         rows.append([row.id, row.name, row.course_code, row.course_type, row.course_nature,
-                     row.semester, row.cohort or '', effective_teaching_weeks(row),
-                     row.semester_sessions, row.weekly_sessions, row.hours_per_session,
-                     row.total_hours, row.credits, '是' if row.requires_consecutive else '否',
+                     row.semester, row.cohort or '', info['teaching_weeks'],
+                     _weekdays_text(info['weekdays']), info['total_hours'],
+                     row.credits, '是' if row.requires_consecutive else '否',
                      '是' if row.requires_lab else '否', row.department or '',
                      units.get(row.offering_unit_id, ''), leaders.get(row.leader_teacher_id, ''),
                      '活动' if row.is_active else '已移出', row.remarks or ''])
@@ -92,7 +97,7 @@ def _course_rows(db):
 
 
 COURSE_HEADERS = ['ID', '课程名称', '课程编码', '课程类型', '课程性质', '上课学期', '适用年级',
-                  '授课周数', '学期教学次数', '每周上课次数', '每次课时', '总课时', '学分',
+                  '授课周数', '每周上课日', '总课时', '学分',
                   '需连排', '需实验室', '所属专业', '开课单位', '课程负责人', '状态', '备注']
 
 

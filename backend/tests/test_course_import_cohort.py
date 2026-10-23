@@ -16,7 +16,7 @@ class CourseImportCohortTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_csv_course_import_forces_active_cohort(self):
         headers = await self.admin_headers()
-        csv = '课程名称,课程编码,上课学期,学期教学次数,适用年级\n构成设计,C1,1,16,2024\n'
+        csv = '课程名称,课程编码,上课学期,总课时,适用年级\n构成设计,C1,1,32,2024\n'
         response = await self.client.post('/api/io/csv/courses', headers=headers, data={'cohort': '2026'},
             files={'file': ('courses.csv', csv.encode('utf-8'), 'text/csv')})
         self.assertTrue(response.json()['success'], response.text)
@@ -25,8 +25,8 @@ class CourseImportCohortTests(unittest.IsolatedAsyncioTestCase):
     async def test_xlsx_preview_and_confirm_force_active_cohort(self):
         headers = await self.admin_headers()
         wb = Workbook(); ws = wb.active
-        ws.append(['课程名称', '课程编码', '上课学期', '学期教学次数', '适用年级'])
-        ws.append(['构成设计', 'X1', 1, 16, '2024'])
+        ws.append(['课程名称', '课程编码', '上课学期', '总课时', '适用年级'])
+        ws.append(['构成设计', 'X1', 1, 32, '2024'])
         out = BytesIO(); wb.save(out)
         preview = await self.client.post('/api/io/xlsx/courses/preview', headers=headers,
             data={'cohort': '2026'}, files={'file': ('courses.xlsx', out.getvalue())})
@@ -42,7 +42,7 @@ class CourseImportCohortTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_import_without_cohort_keeps_file_value(self):
         headers = await self.admin_headers()
-        csv = '课程名称,课程编码,上课学期,学期教学次数,适用年级\n构成设计,C2,1,16,2024\n'
+        csv = '课程名称,课程编码,上课学期,总课时,适用年级\n构成设计,C2,1,32,2024\n'
         response = await self.client.post('/api/io/csv/courses', headers=headers,
             files={'file': ('courses.csv', csv.encode('utf-8'), 'text/csv')})
         self.assertTrue(response.json()['success'], response.text)

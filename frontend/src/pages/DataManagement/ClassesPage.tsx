@@ -12,6 +12,7 @@ import type { ClassCoursesResponse } from '../../types';
 import { planningApi } from '../../api/planning';
 import { currentGradeCohorts, matchesGrade } from '../../lib/adminStageGrid';
 import { downloadDataset } from '../../lib/download';
+import { weekdayLabel } from '../../lib/weekdays';
 
 const GRADE_COHORTS = currentGradeCohorts();
 const cohortLabel = (value:string) => /^\d{4}(届|级)?$/.test(value||'') ? `${value.slice(0,4)}级` : '待补录年级';
@@ -49,9 +50,9 @@ export default function ClassesPage() {
   const courseColumns = [
     { title: '课程名称', dataIndex: 'course_name', key: 'course_name', width: 140 },
     { title: '课程编码', dataIndex: 'course_code', key: 'course_code', width: 90 },
-    { title: '学期次数', dataIndex: 'semester_sessions', key: 'semester_sessions', width: 70 },
-    { title: '周次数', dataIndex: 'weekly_sessions', key: 'weekly_sessions', width: 60 },
-    { title: '每次课时', dataIndex: 'hours_per_session', key: 'hours_per_session', width: 70 },
+    { title: '授课周数', dataIndex: 'teaching_weeks', key: 'teaching_weeks', width: 70 },
+    { title: '每周上课日', dataIndex: 'weekdays', key: 'weekdays', width: 120, render: (days: number[]) => weekdayLabel(days) || '未设置' },
+    { title: '周均学时', dataIndex: 'weekly_hours', key: 'weekly_hours', width: 70 },
     { title: '总课时', dataIndex: 'total_hours', key: 'total_hours', width: 60, render: (v: number | null) => v ?? '-' },
     {
       title: '授课教师', dataIndex: 'teacher_names', key: 'teacher_names', width: 140,

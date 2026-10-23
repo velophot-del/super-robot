@@ -36,7 +36,7 @@ class StagePlacementTests(unittest.IsolatedAsyncioTestCase):
         self.db.add(ClassInfo(name='A', grade='2026', department='Design', student_count=30))
         self.db.add(Course(name='Typography', course_code='A', credits=4, total_hours=64,
                            semester=1, cohort='2026', department='Design', teaching_weeks=5,
-                           semester_sessions=16, weekly_sessions=2, hours_per_session=2))
+                           weekdays=[1, 3]))
         self.db.add(AcademicPlan(id=1, name='Term', start_date=date(2027, 9, 6), weeks=20,
                                  deadline=datetime(2027, 8, 1), state='draft', revision=1,
                                  settings={'major': 'Design', 'cohort': '2026', 'semester': 1,
@@ -56,9 +56,9 @@ class StagePlacementTests(unittest.IsolatedAsyncioTestCase):
         h = {'Authorization': 'Bearer ' + (await self.client.post(
             '/api/debug/session', json={'role': 'admin'})).json()['access_token']}
         self.db.add(ClassInfo(name='A', grade='2026', department='Design', student_count=30))
-        self.db.add(Course(name='Typography', course_code='A', credits=4, total_hours=64,
+        self.db.add(Course(name='Typography', course_code='A', credits=4, total_hours=32,
                            semester=1, cohort='2026', department='Design', teaching_weeks=None,
-                           semester_sessions=16, weekly_sessions=2, hours_per_session=2))
+                           weekdays=[1, 3]))
         self.db.add(AcademicPlan(id=1, name='Term', start_date=date(2027, 9, 6), weeks=20,
                                  deadline=datetime(2027, 8, 1), state='draft', revision=1,
                                  settings={'major': 'Design', 'cohort': '2026', 'semester': 1,

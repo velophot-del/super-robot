@@ -19,11 +19,11 @@ def parse_course_workbook(content: bytes):
             for column,value in enumerate(raw):
                 key=str(value or '').strip()
                 if key in aliases:mapped[column]=aliases[key]
-            if {'name','course_code','semester','semester_sessions'}.issubset(set(mapped.values())):
+            if {'name','course_code','semester','total_hours'}.issubset(set(mapped.values())):
                 header_index=index;header_map=mapped;break
         if header_index is None:
             if any(any(value not in (None,'') for value in row) for row in values):
-                errors.append({'sheet':sheet.title,'row':None,'message':'前15行未找到课程名称、课程编码、上课学期、学期教学次数表头'})
+                errors.append({'sheet':sheet.title,'row':None,'message':'前15行未找到课程名称、课程编码、上课学期、总课时表头'})
             continue
         for index,raw in enumerate(values[header_index+1:],start=header_index+2):
             if not any(value not in (None,'') for value in raw):continue
@@ -38,15 +38,18 @@ def parse_course_workbook(content: bytes):
 
 def course_row_issues(row, db):
     issues=[]
-    for field,label in [('name','课程名称'),('course_code','课程编码'),('semester','上课学期'),('semester_sessions','学期教学次数')]:
+    for field,label in [('name','课程名称'),('course_code','课程编码'),('semester','上课学期'),('total_hours','总课时')]:
         if row.get(field) in (None,''):
             issues.append(f'{label}不能为空')
     try:
         if not 1<=int(row.get('semester'))<=12:issues.append('上课学期须为1至12')
     except (TypeError,ValueError):issues.append('上课学期须为1至12')
     try:
-        if int(row.get('semester_sessions'))<1:issues.append('学期教学次数须大于0')
-    except (TypeError,ValueError):issues.append('学期教学次数须为整数')
+        if int(row.get('total_hours'))<1:issues.append('总课时须大于0')
+    except (TypeError,ValueError):issues.append('总课时须为整数')
+    weekdays=row.get('weekdays') or []
+    if weekdays and (not isinstance(weekdays,list) or any(not isinstance(day,int) or not 1<=day<=7 for day in weekdays)):
+        issues.append('每周上课日须为周一至周日')
     if row.get('cohort') and not str(row['cohort']).strip().removesuffix('级').isdigit():
         issues.append('适用年级请填写年份，如2026')
     if row.get('teaching_weeks') not in (None, ''):

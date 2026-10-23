@@ -10,6 +10,7 @@ from app.models.course import Course
 from app.models.class_info import ClassInfo
 from app.models.planning import TeacherProfile
 from app.services.course_library import professional_courses
+from app.services.course_catalog import course_schedule_info
 from app.services.schedule_versions import resolve_schedule_version
 from app.schemas.teacher import TeacherCreate, TeacherUpdate, TeacherResponse
 
@@ -62,14 +63,16 @@ def get_teacher_courses(teacher_id: int, version: str = Query(None), db: Session
         if key not in course_map:
             course = db.query(Course).filter(Course.id == entry.course_id).first()
             cls = db.query(ClassInfo).filter(ClassInfo.id == entry.class_id).first()
+            info = course_schedule_info(course) if course else {
+                'teaching_weeks': 0, 'weekdays': [], 'total_hours': 0, 'weekly_hours': 0}
             course_map[key] = {
                 "course_id": entry.course_id,
                 "course_name": course.name if course else "",
                 "course_code": course.course_code if course else "",
-                "semester_sessions": course.semester_sessions if course else 0,
-                "weekly_sessions": course.weekly_sessions if course else 0,
-                "hours_per_session": course.hours_per_session if course else 0,
-                "total_hours": course.total_hours if course else None,
+                "teaching_weeks": info['teaching_weeks'],
+                "weekdays": info['weekdays'],
+                "total_hours": info['total_hours'],
+                "weekly_hours": info['weekly_hours'],
                 "class_name": cls.name if cls else "",
                 "time_slots": 0,
             }
@@ -82,14 +85,14 @@ def get_teacher_courses(teacher_id: int, version: str = Query(None), db: Session
             "course_id": info["course_id"],
             "course_name": info["course_name"],
             "course_code": info["course_code"],
-            "semester_sessions": info["semester_sessions"],
-            "weekly_sessions": info["weekly_sessions"],
-            "hours_per_session": info["hours_per_session"],
+            "teaching_weeks": info["teaching_weeks"],
+            "weekdays": info["weekdays"],
             "total_hours": info["total_hours"],
+            "weekly_hours": info["weekly_hours"],
             "class_name": info["class_name"],
             "time_slots": info["time_slots"],
         })
-        total += info["weekly_sessions"]
+        total += info["weekly_hours"]
 
     return {
         "teacher_id": teacher_id, "teacher_name": teacher.name,

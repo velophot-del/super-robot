@@ -25,7 +25,7 @@ from app.services.matching_weights import get_match_weights, weight_items, weigh
 from app.services.workload import compute_teacher_workload
 from app.services.teacher_course_matching import score_candidate
 from app.services.personal_profile import require_personal_profile,missing_profile_fields,effective_profile
-from app.services.course_catalog import course_catalog_scope
+from app.services.course_catalog import course_catalog_scope, course_schedule_info
 from app.services.ai_explanation import generate_ai_advice
 from app.services.ai_config import LLMError, call_llm, resolve_config
 
@@ -165,11 +165,12 @@ def generate_tasks_from_course_catalog(plan_id: int, user=Depends(require_user),
                 key = (course.course_code, cls.name)
                 if key in keys:
                     continue
+                info = course_schedule_info(course)
                 payload = {
                     'name': course.name,
                     'code': course.course_code,
                     'credits': course.credits,
-                    'required_hours': course.total_hours or course.semester_sessions * course.hours_per_session,
+                    'required_hours': info['total_hours'],
                     'direction': '',
                     'tags': [],
                     'group': cls.name,
@@ -196,8 +197,10 @@ def generate_tasks_from_course_catalog(plan_id: int, user=Depends(require_user),
                             'course_type': course.course_type,
                             'course_nature': course.course_nature,
                             'semester': course.semester,
-                            'teaching_weeks': course.teaching_weeks or course.semester_sessions,
-                            'weekly_hours': course.weekly_sessions * course.hours_per_session,
+                            'teaching_weeks': info['teaching_weeks'],
+                            'weekdays': info['weekdays'],
+                            'weekly_hours': info['weekly_hours'],
+                            'tail_hours': course.tail_hours,
                         },
                     },
                 }

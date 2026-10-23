@@ -6,6 +6,7 @@ import { DownloadOutlined } from '@ant-design/icons';
 import DataTable from '../../components/DataTable';
 import { ImportButton } from '../../components/DataImport';
 import { downloadDataset } from '../../lib/download';
+import { WEEKDAY_OPTIONS, weekdayLabel } from '../../lib/weekdays';
 import { courseApi, teacherApi } from '../../api/client';
 import { filterCourses, courseFilterOptions, loadAllCourses, currentGradeCohorts, courseCohorts, inGrade } from '../../lib/courseFilters';
 import type { CourseFilters } from '../../lib/courseFilters';
@@ -71,7 +72,7 @@ export default function CoursesPage() {
         <Tabs type="card" activeKey={gradeTab} onChange={setGradeTab}
           items={GRADE_COHORTS.map(cohort => ({key: cohort, label: `${cohort}级`}))} style={{marginBottom:0}}/>
       </div>
-      <span style={{color:'#8c8c8c',fontSize:12}}>每个页签展示该届学生培养方案中的全部课程；授课周数取教学计划，缺失时按学期次数÷每周次数自动计算</span>
+      <span style={{color:'#8c8c8c',fontSize:12}}>每个页签展示该届学生培养方案中的全部课程；授课周数取教学计划，每周上课日与计划总学时用于排课，具体节次在排课阶段安排</span>
     </div>
     <Space wrap style={{marginBottom:16}}>
       {([['course_type','课程类型'],['category','课程性质'],['department','专业']] as const).map(([key,label]) =>
@@ -107,10 +108,12 @@ export default function CoursesPage() {
             return cohorts.length ? cohorts.map(gradeLabel).join('、') : '不限';
         } },
         { title: '授课周数', dataIndex: 'teaching_weeks', width: 100, render: (v:number|null, r:any) => {
-            const weeks=v||Math.max(1,Math.ceil((r.semester_sessions||0)/Math.max(r.weekly_sessions||1,1)));
+            const days=Math.max((r.weekdays?.length||0),1);
+            const weeks=v||Math.max(1,Math.ceil((r.total_hours||0)/days/2));
             return `${weeks} 周${v?'':'（自动）'}`;
         } },
-        { title: '总课时', dataIndex: 'total_hours', width: 70, render: (v: number|null) => v ?? '-' },
+        { title: '每周上课日', dataIndex: 'weekdays', width: 130, render: (days:number[]) => weekdayLabel(days) || '未设置' },
+        { title: '计划总学时', dataIndex: 'total_hours', width: 100, render: (v: number|null) => v ?? '-' },
         { title: '学分', dataIndex: 'credits', width: 60 },
         { title: '需连排', dataIndex: 'requires_consecutive', width: 70, render: (v: boolean) => v ? '是' : '否' },
         { title: '需实验室', dataIndex: 'requires_lab', width: 80, render: (v: boolean) => v ? '是' : '否' },
@@ -128,6 +131,8 @@ export default function CoursesPage() {
         <Form.Item name="cohort" label="适用年级"><Select allowClear showSearch placeholder="不修改" options={[{value:'__clear__',label:'不限年级'},...options.cohort.map(value=>({value,label:gradeLabel(value)}))]}/></Form.Item>
         <Form.Item name="department" label="适用专业"><Select allowClear showSearch placeholder="不修改" options={[{value:'__clear__',label:'通用课程'},...options.department.map(value=>({value,label:value}))]}/></Form.Item>
         <Form.Item name="offering_unit_id" label="开课单位"><Select allowClear showSearch placeholder="不修改" options={[{value:'__clear__',label:'清空开课单位'},...units.map(unit=>({value:unit.id,label:unit.name}))]}/></Form.Item>
+        <Form.Item name="weekdays" label="每周上课日"><Select mode="multiple" allowClear placeholder="不修改" options={WEEKDAY_OPTIONS}/></Form.Item>
+        <Form.Item name="teaching_weeks" label="授课周数"><InputNumber min={1} max={20} style={{width:'100%'}} placeholder="不修改"/></Form.Item>
         <Form.Item name="is_active" label="课程状态"><Select allowClear placeholder="不修改" options={[{value:true,label:'纳入课程库'},{value:false,label:'停用'}]}/></Form.Item>
       </Form>
     </Modal>
@@ -138,17 +143,6 @@ export default function CoursesPage() {
 }
 
 function CourseFields({ form,teachers,teacherLoading,teacherError,units }: { form: FormInstance;teachers:any[];teacherLoading:boolean;teacherError:string;units:any[] }) {
-        // 监听学期教学次数和每次课时变化，自动计算总课时
-        const semesterSessions = Form.useWatch('semester_sessions', form);
-        const hoursPerSession = Form.useWatch('hours_per_session', form);
-
-        useEffect(() => {
-          if ((form.isFieldTouched('semester_sessions')||form.isFieldTouched('hours_per_session')) && semesterSessions != null && hoursPerSession != null) {
-            const calculated = semesterSessions * hoursPerSession;
-            form.setFieldValue('total_hours', calculated);
-          }
-        }, [semesterSessions, hoursPerSession, form]);
-
         return (
           <>
             <Form.Item name="name" label="课程名称" rules={[{ required: true }]}>
@@ -173,20 +167,15 @@ function CourseFields({ form,teachers,teacherLoading,teacherError,units }: { for
               <Select placeholder="选择课程上课学期" options={Array.from({length:12},(_,i)=>({value:i+1,label:`第${i+1}学期`}))} />
             </Form.Item>
             <Form.Item name="cohort" label="适用年级"><Input placeholder="如：2026；留空表示适用于所有匹配年级"/></Form.Item>
-            <Form.Item name="semester_sessions" label="学期教学次数" rules={[{ required: true }]} help="一学期总共上几次课">
-              <InputNumber min={1} max={40} style={{ width: '100%' }} />
+            <Form.Item name="weekdays" label="每周上课日" rules={[{ required: true, message: '请选择每周上课日' }]}
+              help="课程固定在一周的哪几天上课；具体第几节由排课阶段安排">
+              <Select mode="multiple" placeholder="如：周一、周三" options={WEEKDAY_OPTIONS} />
             </Form.Item>
-            <Form.Item name="weekly_sessions" label="每周上课次数" help="每周排几个时间段">
-              <InputNumber min={1} max={8} style={{ width: '100%' }} />
+            <Form.Item name="teaching_weeks" label="授课周数" help="来自教学计划，可在排课时自动使用">
+              <InputNumber min={1} max={20} style={{ width: '100%' }} />
             </Form.Item>
-            <Form.Item name="hours_per_session" label="每次课时" help="一次课等于几学时，通常为2">
-              <InputNumber min={1} max={6} style={{ width: '100%' }} />
-            </Form.Item>
-            <Form.Item
-              name="total_hours"
-              label="总课时"
-              help="自动计算（学期教学次数 × 每次课时），可手动修改"
-            >
+            <Form.Item name="total_hours" label="计划总学时" rules={[{ required: true, message: '请填写计划总学时' }]}
+              help="按教学计划填写；排课与发布按此校验">
               <InputNumber min={1} style={{ width: '100%' }} />
             </Form.Item>
             <Form.Item name="credits" label="学分">
