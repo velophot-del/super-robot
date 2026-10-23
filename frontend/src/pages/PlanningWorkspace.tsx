@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, Button, Card, Checkbox, Col, DatePicker, Descriptions, Empty, Form, Input, InputNumber, message,
   Modal, Row, Select, Space, Spin, Table, Tabs, Tag, Tooltip, Typography } from 'antd';
-import { InfoCircleOutlined } from '@ant-design/icons';
+import { InfoCircleOutlined, RobotOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useAuth } from '../contexts/AuthContext';
 import { can } from '../lib/accessPolicy';
@@ -58,6 +58,18 @@ export function ManagementPlanningWorkspace({section='plan'}:{section?:'plan'|'r
   const action=async(fn:()=>Promise<unknown>)=>{
     setBusy(true);try{await fn();await load();message.success('已保存');}catch(e){message.error(e instanceof Error?e.message:'操作失败');}finally{setBusy(false);}
   };
+  const aiMatch=async()=>{
+    if(!id)return;
+    setBusy(true);
+    try{
+      const result:any=await api.matchWithAi(id);
+      await load();
+      if(result.ai_applied)message.success(`AI 排序已落位 ${result.auto_assigned} 门课程`);
+      else if(result.ai_used)message.warning(`AI 已排序，但候选未通过校验，已按规则落位 ${result.auto_assigned} 门`);
+      else message.warning(`AI 未参与排序${result.ai_reason?`：${result.ai_reason}`:''}；已按规则落位 ${result.auto_assigned} 门`);
+    }catch(e){message.error(e instanceof Error?e.message:'AI 匹配失败');}
+    finally{setBusy(false);}
+  };
   const openModal=(type:'plan'|'task'|'profile',p?:any)=>{
     form.resetFields();setModal(type);setProfileId(p?.id);
     setEditingTask(type==='task'?p:undefined);
@@ -85,11 +97,16 @@ export function ManagementPlanningWorkspace({section='plan'}:{section?:'plan'|'r
   const taskName=(taskId:number)=>tasks.find(t=>t.id===taskId)?.name||String(taskId);
 
   const matchView=<Space orientation="vertical" size="large" style={{width:'100%'}}>
-    <Alert showIcon type="info" title={admin?'系统自动匹配 + 人工审核调剂':'教研室主任审核'} description={admin?`综合推荐按当前权重合计 ${state.match_weight_total??95} 分计算；专业适配度只使用方向和领域。系统按规则自动匹配并落位，管理员可在下方实时全学院课表中核对申报教师并人工调剂。`:'可查看并审核授权专业方向的课程任务；匹配由学院管理员统一运行。'}/>
+    <Alert showIcon type="info" title={admin?'系统自动匹配 + 人工审核调剂':'教研室主任审核'} description={admin?`综合推荐按当前权重合计 ${state.match_weight_total??95} 分计算；专业适配度只使用方向和领域。可运行系统规则匹配，或使用「AI 排序并自动落位」让模型按同一套权重重排候选；落位前仍会校验教师意愿、回避与容量。管理员可在下方实时全学院课表中核对并人工调剂。`:'可查看并审核授权专业方向的课程任务；匹配由学院管理员统一运行。'}/>
     {admin&&<Card size="small" title="匹配权重设置" style={{marginBottom:16}}>
       <MatchWeightsPanel plan={state} disabled={busy} onSaved={load}/>
     </Card>}
-    {admin&&<Space wrap><Button type="primary" loading={busy} disabled={!state.rule_confirmed||!['open','matched'].includes(state.state)} onClick={()=>void action(()=>api.match(id!))}>运行系统匹配（自动落位） / 保留锁定重跑</Button><Text>已提交教师：{state.submission_count??'—'}</Text></Space>}
+    {admin&&<Space wrap>
+      <Button type="primary" loading={busy} disabled={!state.rule_confirmed||!['open','matched'].includes(state.state)} onClick={()=>void action(()=>api.match(id!))}>运行系统匹配（自动落位） / 保留锁定重跑</Button>
+      <Button icon={<RobotOutlined/>} loading={busy} disabled={!state.rule_confirmed||!['open','matched'].includes(state.state)} onClick={()=>void aiMatch()}>AI 排序并自动落位</Button>
+      <Text>已提交教师：{state.submission_count??'—'}</Text>
+      {state.match?.ai?.used&&<Tag color="purple">AI 排序{state.match.ai.applied?` · 落位${state.match.ai.applied}门`:' · 未采用'}</Tag>}
+    </Space>}
     {state.match?<Table rowKey={r=>`${r.task_id}-${r.teacher_id}`} dataSource={state.match.candidates} pagination={false} scroll={{x:760}}
       columns={[
         {title:'课程任务',render:(_,r:any)=>`${taskName(r.task_id)} · ${tasks.find(t=>t.id===r.task_id)?.group}`},

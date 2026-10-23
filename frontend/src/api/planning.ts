@@ -36,6 +36,7 @@ export const planningApi = {
   saveDraft: (id: number, data: unknown) => api.put(`/planning/plans/${id}/draft`, data),
   submit: (id: number, revision: number) => api.post(`/planning/plans/${id}/submit`, { revision }),
   match: (id: number) => api.post(`/planning/plans/${id}/match`),
+  matchWithAi: (id: number) => api.post(`/planning/plans/${id}/match`, undefined, {params:{use_ai:true}}),
   saveMatchWeights: (id:number,data:unknown) => api.put(`/planning/plans/${id}/match-weights`,data),
   saveExamWeeks: (id:number,data:unknown) => api.put(`/planning/plans/${id}/exam-weeks`,data),
   assign: (id: number, data: unknown) => api.post(`/planning/plans/${id}/assign`, data),
