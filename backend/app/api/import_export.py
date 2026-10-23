@@ -1,6 +1,6 @@
 """数据导入导出API"""
 import json
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
@@ -35,11 +35,22 @@ class XlsxConfirmInput(BaseModel):
     token: str = Field(min_length=20, max_length=100)
 
 
+def target_cohort(value):
+    """课程导入的目标年级：去除“级/届”后缀，未提供时不覆盖文件中的适用年级。"""
+    text = (value or '').strip().removesuffix('级').removesuffix('届')
+    if not text:
+        return None
+    if not text.isdigit():
+        raise HTTPException(422, '目标年级须为入学年份，如2026')
+    return text
+
+
 @router.post('/xlsx/courses/preview', summary='预览课程 XLSX 导入')
-async def preview_courses_xlsx(file:UploadFile=File(...),user=Depends(require_user),db:Session=Depends(get_db)):
+async def preview_courses_xlsx(file:UploadFile=File(...),cohort:str|None=Form(None),user=Depends(require_user),db:Session=Depends(get_db)):
     from app.services.authorization import check
     from app.services.spreadsheet_import import parse_course_workbook,course_row_issues,normalize_course_row
     check(user,'admin')
+    target=target_cohort(cohort)
     if not file.filename or not file.filename.lower().endswith('.xlsx'):
         raise HTTPException(400,'请上传.xlsx格式的课程文件')
     content=await file.read(10*1024*1024+1)
@@ -49,6 +60,8 @@ async def preview_courses_xlsx(file:UploadFile=File(...),user=Depends(require_us
     if not rows and not parse_errors:raise HTTPException(422,'Excel中没有可识别的课程数据')
     seen=set();preview_rows=[];counts={'new':0,'duplicate':0,'invalid':0}
     for row in rows:
+        # 从某个年级页签导入时，课程统一归属该年级，忽略文件中的适用年级。
+        if target:row['cohort']=target
         issues,teacher_id,unit_id=course_row_issues(row,db)
         code=str(row.get('course_code') or '').strip()
         if code and (code in seen or db.query(Course.id).filter_by(course_code=code).first()):
@@ -64,11 +77,11 @@ async def preview_courses_xlsx(file:UploadFile=File(...),user=Depends(require_us
     token=secrets.token_urlsafe(32)
     batch=ImportPreviewBatch(entity_type='courses',filename=file.filename[:200],
         file_sha256=hashlib.sha256(content).hexdigest(),token_hash=hashlib.sha256(token.encode()).hexdigest(),
-        status='pending',payload={'rows':preview_rows,'counts':counts,'parse_errors':parse_errors},
+        status='pending',payload={'rows':preview_rows,'counts':counts,'parse_errors':parse_errors,'target_cohort':target},
         expires_at=datetime.utcnow()+timedelta(minutes=30))
     db.add(batch);db.commit();db.refresh(batch)
     return {'preview_id':batch.id,'token':token,'expires_at':batch.expires_at,'counts':counts,
-            'rows':preview_rows,'parse_errors':parse_errors,'file_sha256':batch.file_sha256}
+            'rows':preview_rows,'parse_errors':parse_errors,'file_sha256':batch.file_sha256,'target_cohort':target}
 
 
 @router.post('/xlsx/courses/confirm', summary='确认导入课程 XLSX')
@@ -85,11 +98,14 @@ def confirm_courses_xlsx(data:XlsxConfirmInput,user=Depends(require_user),db:Ses
     if batch.expires_at<datetime.utcnow():raise HTTPException(409,'导入预览已过期，请重新上传')
     with write(db):
         payload=dict(batch.payload);imported=0;skipped=0
+        target=payload.get('target_cohort')
         for row in payload['rows']:
             if row['status']!='new':skipped+=1;continue
             if db.query(Course.id).filter_by(course_code=row['course_code']).first():
                 skipped+=1;continue
-            db.add(Course(**row['data']));imported+=1
+            data=dict(row['data'])
+            if target:data['cohort']=target
+            db.add(Course(**data));imported+=1
         batch.status='confirmed'
         result={'imported':imported,'skipped':skipped,'file_sha256':batch.file_sha256}
         payload['result']=result;batch.payload=payload
@@ -124,7 +140,8 @@ def download_course_xlsx_template():
 
 
 @router.post("/csv/{entity_type}", summary="CSV批量导入")
-async def import_csv(entity_type: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def import_csv(entity_type: str, file: UploadFile = File(...), cohort: str | None = Form(None),
+                     db: Session = Depends(get_db)):
     """通过CSV文件批量导入实体数据"""
     if not file.filename or not file.filename.endswith('.csv'):
         raise HTTPException(status_code=400, detail="请上传CSV格式的文件")
@@ -139,6 +156,12 @@ async def import_csv(entity_type: str, file: UploadFile = File(...), db: Session
         raise HTTPException(status_code=410, detail='课程一体化导入已停用，请通过课程管理导入课程数据')
 
     data_rows, parse_errors = parse_csv_content(text_content, entity_type)
+
+    # 从某个年级页签导入课程时，统一归属该年级，忽略文件中的适用年级。
+    target = target_cohort(cohort) if entity_type == 'courses' else None
+    if target:
+        for row in data_rows:
+            row['cohort'] = target
 
     if parse_errors and not data_rows:
         return {"success": False, "errors": parse_errors, "imported": 0}

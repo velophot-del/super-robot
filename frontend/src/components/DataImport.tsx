@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { Upload, Button, Space, Typography, Alert, message, Table, Tag, Modal, Card } from 'antd';
 import { InboxOutlined, DownloadOutlined, UploadOutlined, ImportOutlined } from '@ant-design/icons';
 import { ioApi } from '../api/client';
+import { gradeLabel } from '../lib/adminStageGrid';
 
 const { Text } = Typography;
 const { Dragger } = Upload;
@@ -12,8 +13,8 @@ const ENTITY_LABELS: Record<ImportEntityType, string> = {
   classes: '班级数据', teachers: '教师数据', courses: '课程数据', classrooms: '教室数据',
 };
 
-export function DataImportPanel({ entityType, onImported }: {
-  entityType: ImportEntityType; onImported?: () => void;
+export function DataImportPanel({ entityType, cohort, onImported }: {
+  entityType: ImportEntityType; cohort?: string; onImported?: () => void;
 }) {
   const [file, setFile] = useState<File | null>(null);
   const [result, setResult] = useState<any>(null);
@@ -44,12 +45,13 @@ export function DataImportPanel({ entityType, onImported }: {
     }
     setLoading(true);
     try {
+      const targetCohort = entityType === 'courses' ? cohort : undefined;
       if (entityType === 'courses' && file.name.toLowerCase().endsWith('.xlsx')) {
-        const preview = await ioApi.previewCoursesXlsx(file);
+        const preview = await ioApi.previewCoursesXlsx(file, targetCohort);
         setXlsxPreview(preview); setResult(null);
         message.success(`预览完成：新增${preview.counts.new}，重复${preview.counts.duplicate}，需修正${preview.counts.invalid}`);
       } else {
-        const res = await ioApi.importCsv(entityType, file);
+        const res = await ioApi.importCsv(entityType, file, targetCohort);
         setResult(res);
         if ((res as any).success) { message.success((res as any).summary || '导入成功'); onImported?.(); }
       }
@@ -71,6 +73,9 @@ export function DataImportPanel({ entityType, onImported }: {
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      {entityType === 'courses' && cohort && (
+        <Alert type="info" showIcon message={`本批次课程将统一归属 ${gradeLabel(cohort)}，文件中的「适用年级」将被忽略。`} />
+      )}
       <div>
         <Text strong style={{ display: 'block', marginBottom: 8, color: '#0d253d' }}>
           1. 下载导入模板（按模板格式填写数据）
@@ -111,6 +116,7 @@ export function DataImportPanel({ entityType, onImported }: {
           <Alert type="info" showIcon message={`新增 ${xlsxPreview.counts.new} · 重复 ${xlsxPreview.counts.duplicate} · 错误 ${xlsxPreview.counts.invalid}`} description="确认前不会写入课程；重复课程编码将跳过，错误行需要修正后重新上传。预览令牌30分钟有效且只能确认一次。" />
           <Table style={{ marginTop: 12 }} rowKey={(r: any) => `${r.source_sheet}-${r.source_row}`} dataSource={xlsxPreview.rows} pagination={{ pageSize: 10 }} columns={[
             { title: '工作表 / 行', render: (_: unknown, r: any) => `${r.source_sheet} / ${r.source_row}` }, { title: '课程编码', dataIndex: 'course_code' }, { title: '课程名称', dataIndex: 'name' },
+            { title: '适用年级', render: (_: unknown, r: any) => gradeLabel(r.data?.cohort) || '—' },
             { title: '状态', dataIndex: 'status', render: (v: string) => <Tag color={v === 'new' ? 'green' : v === 'duplicate' ? 'gold' : 'red'}>{v === 'new' ? '新增' : v === 'duplicate' ? '重复' : '错误'}</Tag> },
             { title: '问题', dataIndex: 'issues', render: (v: string[]) => v?.join('；') || '—' }
           ]} />
@@ -145,8 +151,8 @@ export function DataImportPanel({ entityType, onImported }: {
   );
 }
 
-export function ImportButton({ entityType, onImported, label = '导入' }: {
-  entityType: ImportEntityType; onImported?: () => void; label?: string;
+export function ImportButton({ entityType, cohort, onImported, label = '导入' }: {
+  entityType: ImportEntityType; cohort?: string; onImported?: () => void; label?: string;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -154,7 +160,7 @@ export function ImportButton({ entityType, onImported, label = '导入' }: {
       <Button icon={<ImportOutlined />} onClick={() => setOpen(true)}>{label}</Button>
       <Modal title={`批量导入${ENTITY_LABELS[entityType]}`} open={open} onCancel={() => setOpen(false)}
         footer={null} width={780} destroyOnClose>
-        <DataImportPanel entityType={entityType} onImported={onImported} />
+        <DataImportPanel entityType={entityType} cohort={cohort} onImported={onImported} />
       </Modal>
     </>
   );
