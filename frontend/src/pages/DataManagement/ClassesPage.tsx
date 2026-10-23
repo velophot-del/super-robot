@@ -4,13 +4,14 @@ import {
   Form, Input, InputNumber, Switch, Button, Drawer, Table, Descriptions, Select,
   Statistic, Row, Col, Empty, message, Tag, Tabs,
 } from 'antd';
-import { EyeOutlined } from '@ant-design/icons';
+import { DownloadOutlined, EyeOutlined } from '@ant-design/icons';
 import DataTable from '../../components/DataTable';
 import { ImportButton } from '../../components/DataImport';
 import { classApi } from '../../api/client';
 import type { ClassCoursesResponse } from '../../types';
 import { planningApi } from '../../api/planning';
 import { currentGradeCohorts, matchesGrade } from '../../lib/adminStageGrid';
+import { downloadDataset } from '../../lib/download';
 
 const GRADE_COHORTS = currentGradeCohorts();
 const cohortLabel = (value:string) => /^\d{4}(届|级)?$/.test(value||'') ? `${value.slice(0,4)}级` : '待补录年级';
@@ -19,6 +20,10 @@ export default function ClassesPage() {
   const [tableKey, setTableKey] = useState(0);
   const [gradeTab, setGradeTab] = useState<string>(GRADE_COHORTS[0]);
   const filterData = useCallback((rows:any[]) => rows.filter(row => matchesGrade(row.grade, gradeTab)), [gradeTab]);
+  const downloadClasses = async () => {
+    try { await downloadDataset('classes'); message.success('下载已开始'); }
+    catch (e) { message.error(e instanceof Error ? e.message : '下载失败'); }
+  };
   const [courseDrawerOpen, setCourseDrawerOpen] = useState(false);
   const [selectedClass, setSelectedClass] = useState<{ id: number; name: string; grade: string; department?: string } | null>(null);
   const [classCourses, setClassCourses] = useState<ClassCoursesResponse | null>(null);
@@ -73,7 +78,10 @@ export default function ClassesPage() {
         entityType="classes"
         api={classApi}
         filterData={filterData}
-        extraToolbar={<ImportButton entityType="classes" cohort={gradeTab} onImported={() => setTableKey(k => k + 1)} />}
+        extraToolbar={<>
+          <Button icon={<DownloadOutlined/>} onClick={() => void downloadClasses()}>下载</Button>
+          <ImportButton entityType="classes" cohort={gradeTab} onImported={() => setTableKey(k => k + 1)} />
+        </>}
         columns={[
           { title: 'ID', dataIndex: 'id', width: 60 },
           { title: '班级名称', dataIndex: 'name', width: 140 },

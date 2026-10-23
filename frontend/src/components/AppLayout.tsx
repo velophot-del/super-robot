@@ -170,6 +170,11 @@ export default function AppLayout() {
             <Text className="header-context" type="secondary" style={{ fontSize: 13 }}>
               学院教学管理 · 排课与选课
             </Text>
+            {can(user, 'admin') && (
+              <Button type="text" icon={<DownloadOutlined />} onClick={() => navigate('/data/download')}>
+                数据下载
+              </Button>
+            )}
             <Dropdown
               menu={{
                 items: [

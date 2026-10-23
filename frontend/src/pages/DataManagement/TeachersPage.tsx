@@ -5,16 +5,21 @@ import {
   Statistic, Row, Col, Empty, message, Tag, Typography,
   Divider, Alert, Spin,
 } from 'antd';
-import { EyeOutlined, SettingOutlined } from '@ant-design/icons';
+import { DownloadOutlined, EyeOutlined, SettingOutlined } from '@ant-design/icons';
 import DataTable from '../../components/DataTable';
 import { ImportButton } from '../../components/DataImport';
 import { teacherApi } from '../../api/client';
+import { downloadDataset } from '../../lib/download';
 import type { TeacherCoursesResponse, TeacherCourseInfo, TeacherCourseAffiliations } from '../../types';
 
 const { Text } = Typography;
 
 export default function TeachersPage() {
   const [tableKey, setTableKey] = useState(0);
+  const downloadTeachers = async () => {
+    try { await downloadDataset('teachers'); message.success('下载已开始'); }
+    catch (e) { message.error(e instanceof Error ? e.message : '下载失败'); }
+  };
   // ---- 查看已排课程 ----
   const [courseDrawerOpen, setCourseDrawerOpen] = useState(false);
   const [selectedTeacher, setSelectedTeacher] = useState<{ id: number; name: string; department?: string; title?: string } | null>(null);
@@ -82,7 +87,10 @@ export default function TeachersPage() {
         title="教师管理"
         entityType="teachers"
         api={teacherApi}
-        extraToolbar={<ImportButton entityType="teachers" onImported={() => setTableKey(k => k + 1)} />}
+        extraToolbar={<>
+          <Button icon={<DownloadOutlined/>} onClick={() => void downloadTeachers()}>下载</Button>
+          <ImportButton entityType="teachers" onImported={() => setTableKey(k => k + 1)} />
+        </>}
         columns={[
           { title: 'ID', dataIndex: 'id', width: 60 },
           { title: '姓名', dataIndex: 'name', width: 90 },
