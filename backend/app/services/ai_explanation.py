@@ -1,16 +1,11 @@
 """AI 排课分析与建议。
 
-优先调用 Anthropic Messages API；未配置密钥、超时或返回异常时，
+优先调用已配置的大模型服务；未配置、超时或返回异常时，
 自动回退到基于规则的分析文本，保证接口始终可用。
 """
 import json
-import logging
 
-import httpx
-
-from app.config import settings
-
-logger = logging.getLogger(__name__)
+from app.services.ai_config import LLMError, call_llm, resolve_config
 
 SYSTEM_PROMPT = """你是学院排课系统的分析助手。根据给定的 JSON 排课数据，用中文给出简洁、可执行的审核意见。
 要求：
@@ -65,58 +60,17 @@ def rule_based_advice(context):
             'stats': stats, 'issue_count': len(issues)}
 
 
-def _extract_text(payload):
-    blocks = payload.get('content') or []
-    return '\n'.join(block.get('text', '') for block in blocks if block.get('type') == 'text').strip()
-
-
-def generate_ai_advice(context):
+def generate_ai_advice(context, db=None):
     """生成排课分析；任何失败都回退到规则文本，且不向调用方泄露密钥或原始错误正文。"""
     fallback = rule_based_advice(context)
-    key = (settings.ANTHROPIC_API_KEY or '').strip()
-    if not key:
-        return {**fallback, 'reason': '未配置 ANTHROPIC_API_KEY，已使用规则分析'}
-    url = settings.ANTHROPIC_BASE_URL.rstrip('/') + '/v1/messages'
-    headers = {
-        'content-type': 'application/json',
-        'x-api-key': key,
-        'anthropic-version': settings.ANTHROPIC_API_VERSION,
-        'anthropic-beta': 'server-side-fallback-2026-07-01',
-    }
-    body = {
-        'model': settings.ANTHROPIC_MODEL,
-        'max_tokens': 2000,
-        'system': SYSTEM_PROMPT,
-        'messages': [{'role': 'user', 'content': '以下是排课周期的结构化数据：\n' + json.dumps(context, ensure_ascii=False)}],
-        'output_config': {'effort': 'medium'},
-        'fallbacks': 'default',
-    }
+    config = resolve_config(db)
+    if not config or not config.get('api_key'):
+        return {**fallback, 'reason': '未配置 AI 服务，已使用规则分析'}
+    user_text = '以下是排课周期的结构化数据：\n' + json.dumps(context, ensure_ascii=False)
     try:
-        response = httpx.post(url, headers=headers, json=body, timeout=settings.AI_TIMEOUT_SECONDS)
-    except httpx.TimeoutException:
-        logger.warning('AI explanation timed out')
-        return {**fallback, 'reason': 'AI 服务超时，已使用规则分析'}
-    except httpx.RequestError as exc:
-        logger.warning('AI explanation request failed: %s', type(exc).__name__)
-        return {**fallback, 'reason': 'AI 服务连接失败，已使用规则分析'}
-    if response.status_code != 200:
-        logger.warning('AI explanation status=%s body=%s', response.status_code, response.text[:200])
-        return {**fallback, 'reason': f'AI 服务返回 {response.status_code}，已使用规则分析'}
-    try:
-        payload = response.json()
-    except ValueError:
-        return {**fallback, 'reason': 'AI 服务返回无法解析，已使用规则分析'}
-    if payload.get('stop_reason') == 'refusal':
-        return {**fallback, 'reason': 'AI 拒绝了本次分析，已使用规则分析'}
-    text = _extract_text(payload)
-    if not text:
-        return {**fallback, 'reason': 'AI 未返回文本，已使用规则分析'}
-    return {
-        'source': 'llm',
-        'model': payload.get('model') or settings.ANTHROPIC_MODEL,
-        'text': text,
-        'issues': fallback['issues'],
-        'stats': fallback['stats'],
-        'issue_count': fallback['issue_count'],
-        'usage': payload.get('usage') or {},
-    }
+        result = call_llm(config, SYSTEM_PROMPT, user_text, max_tokens=2000)
+    except LLMError as exc:
+        return {**fallback, 'reason': f'{exc}，已使用规则分析'}
+    return {**fallback, 'source': 'llm', 'provider': config.get('provider'),
+            'model': result.get('model'), 'text': result.get('text', ''),
+            'usage': result.get('usage') or {}}

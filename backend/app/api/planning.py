@@ -340,7 +340,7 @@ def ai_review(plan_id: int, user=Depends(require_user), db: Session = Depends(ge
     """管理员按当前周期状态生成 AI 排课分析；未配置模型密钥时自动使用规则分析。"""
     check(user, 'admin')
     plan = get_plan(db, plan_id)
-    result = generate_ai_advice(_ai_context(db, plan, tasks_for(db, plan)))
+    result = generate_ai_advice(_ai_context(db, plan, tasks_for(db, plan)), db)
     event(db, user, 'ai_review', {'source': result.get('source'), 'model': result.get('model'),
                                   'issue_count': result.get('issue_count', 0)}, plan.id)
     db.commit()

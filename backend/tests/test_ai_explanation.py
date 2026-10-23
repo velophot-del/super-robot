@@ -7,7 +7,7 @@ import test_debug_mode
 from app.config import settings
 from app.models.planning import AcademicPlan
 from app.models.user import User
-from app.services import ai_explanation
+from app.services import ai_config, ai_explanation
 from app.services.auth import account_token, hash_password
 
 CONTEXT = {
@@ -37,12 +37,12 @@ class AiExplanationTests(unittest.TestCase):
             result = ai_explanation.generate_ai_advice(CONTEXT)
         self.assertEqual(result['source'], 'rules')
         self.assertIn('【总体判断】', result['text'])
-        self.assertIn('未配置 ANTHROPIC_API_KEY', result['reason'])
+        self.assertIn('未配置 AI 服务', result['reason'])
         self.assertEqual(result['issue_count'], 1)
 
     def test_llm_path_returns_model_text(self):
         with patch.object(settings, 'ANTHROPIC_API_KEY', 'test-key'), \
-             patch.object(ai_explanation.httpx, 'post', return_value=FakeResponse()) as post:
+             patch.object(ai_config.httpx, 'post', return_value=FakeResponse()) as post:
             result = ai_explanation.generate_ai_advice(CONTEXT)
         self.assertEqual(result['source'], 'llm')
         self.assertEqual(result['text'], '【总体判断】测试分析')

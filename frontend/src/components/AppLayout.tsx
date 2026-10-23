@@ -8,6 +8,7 @@ import {
   BookOutlined,
   BankOutlined,
   ScheduleOutlined,
+  SettingOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   ThunderboltOutlined,
@@ -78,6 +79,8 @@ export default function AppLayout() {
         style={{
           background: '#ffffff',
           borderRight: '1px solid #e6e8ec',
+          display: 'flex',
+          flexDirection: 'column',
         }}
       >
         {/* Logo */}
@@ -120,8 +123,25 @@ export default function AppLayout() {
             background: 'transparent',
             borderRight: 'none',
             marginTop: 8,
+            flex: 1,
+            overflowY: 'auto',
           }}
         />
+        {can(user, 'admin') && !requiresAccountSetup(user) && (
+          <div style={{ padding: '10px 12px', borderTop: '1px solid #e6e8ec' }}>
+            <Button
+              type="text"
+              block
+              icon={<SettingOutlined />}
+              title="AI 设置"
+              aria-label="AI 设置"
+              onClick={() => navigate('/settings/ai')}
+              style={{ justifyContent: collapsed ? 'center' : 'flex-start', color: '#533afd' }}
+            >
+              {!collapsed && 'AI 设置'}
+            </Button>
+          </div>
+        )}
       </Sider>
 
       {/* 主内容区 */}

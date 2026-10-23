@@ -120,14 +120,13 @@ npm run dev -- --host 127.0.0.1 --port 5173 --strictPort
 
 ### AI 排课分析（可选）
 
-「课程表编排」页的「AI 排课分析」会基于当前周期的任务、教师、地点与考试周数据生成风险和建议。未配置模型密钥、调用超时或服务异常时，自动回退到规则分析，功能不受影响。
+管理员点击左侧底部的齿轮「AI 设置」，选择服务商（DeepSeek、通义千问、月之暗面、智谱、自定义 OpenAI 兼容或 Anthropic），填写 API Key 后保存即可。
 
-```bash
-export ANTHROPIC_API_KEY="..."
-# 可选：ANTHROPIC_MODEL（默认 claude-opus-5-5）、ANTHROPIC_BASE_URL、AI_TIMEOUT_SECONDS
-```
-
-修改后需重启后端。接口 `POST /api/planning/plans/{id}/ai-review` 仅管理员可用；密钥只保存在服务端，不会返回前端。
+- 「课程表编排」页的「AI 排课分析」会基于当前周期的任务、教师、地点与考试周数据生成风险和建议。
+- 未配置服务、密钥无效、超时或服务异常时，自动回退到规则分析，功能不受影响。
+- 密钥使用 `SECRET_KEY` 派生的密钥加密后保存在数据库；接口只返回掩码，不会下发到浏览器。更换 `SECRET_KEY` 后需要重新填写。
+- 也可通过环境变量 `ANTHROPIC_API_KEY` 使用 Anthropic（数据库未配置时的回退）；`ANTHROPIC_MODEL`、`ANTHROPIC_BASE_URL`、`AI_TIMEOUT_SECONDS` 可选。
+- 接口 `GET/PUT /api/ai/config`、`POST /api/ai/config/test`、`POST /api/planning/plans/{id}/ai-review` 仅管理员可用。
 
 ### 登录与授权
 
