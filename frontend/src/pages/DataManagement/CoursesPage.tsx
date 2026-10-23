@@ -1,12 +1,12 @@
 // 课程管理页面（含总课时自动计算）
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import type { FormInstance } from 'antd';
-import { Form, Input, InputNumber, Select, Switch, Space, Button, Alert, Modal, Popconfirm, message } from 'antd';
+import { Form, Input, InputNumber, Select, Switch, Space, Button, Alert, Modal, Popconfirm, message, Tabs, Collapse } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import DataTable from '../../components/DataTable';
 import { courseApi, teacherApi } from '../../api/client';
-import { filterCourses, courseFilterOptions, loadAllCourses } from '../../lib/courseFilters';
-import type { CourseFilters } from '../../lib/courseFilters';
+import { filterCourses, courseFilterOptions, loadAllCourses, GRADE_TABS, inGrade } from '../../lib/courseFilters';
+import type { CourseFilters, GradeKey } from '../../lib/courseFilters';
 import { gradeLabel } from '../../lib/adminStageGrid';
 import { planningApi } from '../../api/planning';
 
@@ -25,6 +25,7 @@ export default function CoursesPage() {
   useEffect(()=>{void loadTeachers();},[loadTeachers]);
   useEffect(()=>{void planningApi.offeringUnits().then(setUnits).catch(()=>setUnits([]));},[]);
   const [filters, setFilters] = useState<CourseFilters>({});
+  const [gradeTab,setGradeTab]=useState<GradeKey>('freshman');
   const [includeInactive,setIncludeInactive]=useState(false);
   const [includePublic,setIncludePublic]=useState(false);
   const [catalog, setCatalog] = useState<any[]>([]);
@@ -39,7 +40,8 @@ export default function CoursesPage() {
     setCatalog(rows);
     return params?.search ? rows.filter(r => r.name.includes(params.search)) : rows;
   }}), [includeInactive,includePublic]);
-  const filterData = useCallback((rows: any[]) => filterCourses(rows, filters), [filters]);
+  const filterData = useCallback((rows: any[]) =>
+    filterCourses(rows, filters).filter(row => inGrade(row.semester, gradeTab)), [filters, gradeTab]);
   const refresh=()=>setTableKey(value=>value+1);
   const bulkUpdate=async()=>{
     const raw=bulkForm.getFieldsValue();
@@ -59,15 +61,23 @@ export default function CoursesPage() {
   };
   return (<>
     {teacherError&&<Alert type="error" showIcon title={`课程负责人教师名单加载失败：${teacherError}`} action={<Button onClick={()=>void loadTeachers()}>重试</Button>} style={{marginBottom:16}}/>}
+    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,marginBottom:12}}>
+      <Tabs type="card" activeKey={gradeTab} onChange={key => setGradeTab(key as GradeKey)}
+        items={GRADE_TABS.map(tab => ({key: tab.key, label: tab.label}))} style={{marginBottom:0}}/>
+      <span style={{color:'#8c8c8c',fontSize:12}}>按培养方案学期：大一 1–2 · 大二 3–4 · 大三 5–6 · 大四 7–8</span>
+    </div>
     <Space wrap style={{marginBottom:16}}>
-      {([['course_type','课程类型'],['category','课程性质'],['department','专业'],['cohort','年级']] as const).map(([key,label]) =>
+      {([['course_type','课程类型'],['category','课程性质'],['department','专业']] as const).map(([key,label]) =>
         <Select key={key} aria-label={`按${label}筛选`} placeholder={`全部${label}`} allowClear showSearch
           style={{minWidth:160}} value={filters[key]} onChange={value => setFilters(old => ({...old,[key]:value}))}
-          options={[...options[key].map(value => ({value,label:key==='cohort'?gradeLabel(value):value})),{value:'__unset__',label:'未设置'}]}/>
+          options={[...options[key].map(value => ({value,label:value})),{value:'__unset__',label:'未设置'}]}/>
       )}
       <Button onClick={() => setFilters({})}>重置筛选</Button>
     </Space>
-    <Alert type="info" showIcon style={{marginBottom:16}} title="排课周期直接读取课程库；课程按适用年级、专业和上课学期匹配。公共课（学科通识课、德育通识课）默认不进入课程库列表与排课池。导入课程请使用本页的批量导入。"/>
+    <Collapse ghost size="small" style={{marginBottom:16}} items={[{
+      key: 'help', label: '课程库说明',
+      children: '排课周期直接读取课程库；课程按适用年级、专业和上课学期匹配。公共课（学科通识课、德育通识课）默认不进入课程库列表与排课池。导入课程请使用本页的批量导入。'
+    }]}/>
     <DataTable
       key={tableKey}
       title="课程管理"
