@@ -45,7 +45,7 @@ export function DataImportPanel({ entityType, cohort, onImported }: {
     }
     setLoading(true);
     try {
-      const targetCohort = entityType === 'courses' ? cohort : undefined;
+      const targetCohort = entityType === 'courses' || entityType === 'classes' ? cohort : undefined;
       if (entityType === 'courses' && file.name.toLowerCase().endsWith('.xlsx')) {
         const preview = await ioApi.previewCoursesXlsx(file, targetCohort);
         setXlsxPreview(preview); setResult(null);
@@ -73,8 +73,8 @@ export function DataImportPanel({ entityType, cohort, onImported }: {
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      {entityType === 'courses' && cohort && (
-        <Alert type="info" showIcon message={`本批次课程将统一归属 ${gradeLabel(cohort)}，文件中的「适用年级」将被忽略。`} />
+      {(entityType === 'courses' || entityType === 'classes') && cohort && (
+        <Alert type="info" showIcon message={`本批次${entityType === 'courses' ? '课程' : '班级'}将统一归属 ${gradeLabel(cohort)}，文件中的「${entityType === 'courses' ? '适用年级' : '年级'}」将被忽略。`} />
       )}
       <div>
         <Text strong style={{ display: 'block', marginBottom: 8, color: '#0d253d' }}>

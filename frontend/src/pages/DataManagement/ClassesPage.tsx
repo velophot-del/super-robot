@@ -1,8 +1,8 @@
 // 班级管理页面（含查看课程分配）
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Form, Input, InputNumber, Switch, Button, Drawer, Table, Descriptions, Select,
-  Statistic, Row, Col, Empty, message, Tag,
+  Statistic, Row, Col, Empty, message, Tag, Tabs,
 } from 'antd';
 import { EyeOutlined } from '@ant-design/icons';
 import DataTable from '../../components/DataTable';
@@ -10,11 +10,15 @@ import { ImportButton } from '../../components/DataImport';
 import { classApi } from '../../api/client';
 import type { ClassCoursesResponse } from '../../types';
 import { planningApi } from '../../api/planning';
+import { currentGradeCohorts, matchesGrade } from '../../lib/adminStageGrid';
 
+const GRADE_COHORTS = currentGradeCohorts();
 const cohortLabel = (value:string) => /^\d{4}(届|级)?$/.test(value||'') ? `${value.slice(0,4)}级` : '待补录年级';
 
 export default function ClassesPage() {
   const [tableKey, setTableKey] = useState(0);
+  const [gradeTab, setGradeTab] = useState<string>(GRADE_COHORTS[0]);
+  const filterData = useCallback((rows:any[]) => rows.filter(row => matchesGrade(row.grade, gradeTab)), [gradeTab]);
   const [courseDrawerOpen, setCourseDrawerOpen] = useState(false);
   const [selectedClass, setSelectedClass] = useState<{ id: number; name: string; grade: string; department?: string } | null>(null);
   const [classCourses, setClassCourses] = useState<ClassCoursesResponse | null>(null);
@@ -55,12 +59,21 @@ export default function ClassesPage() {
 
   return (
     <>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,marginBottom:12}}>
+        <div style={{display:'flex',alignItems:'center',gap:12}}>
+          <span style={{fontWeight:600}}>年级</span>
+          <Tabs type="card" activeKey={gradeTab} onChange={setGradeTab}
+            items={GRADE_COHORTS.map(cohort => ({key: cohort, label: `${cohort}级`}))} style={{marginBottom:0}}/>
+        </div>
+        <span style={{color:'#8c8c8c',fontSize:12}}>每个页签展示该届班级</span>
+      </div>
       <DataTable
         key={tableKey}
         title="班级管理"
         entityType="classes"
         api={classApi}
-        extraToolbar={<ImportButton entityType="classes" onImported={() => setTableKey(k => k + 1)} />}
+        filterData={filterData}
+        extraToolbar={<ImportButton entityType="classes" cohort={gradeTab} onImported={() => setTableKey(k => k + 1)} />}
         columns={[
           { title: 'ID', dataIndex: 'id', width: 60 },
           { title: '班级名称', dataIndex: 'name', width: 140 },

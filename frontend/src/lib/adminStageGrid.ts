@@ -20,6 +20,18 @@ export function gradeLabel(value:unknown):string{
   return grade?`${grade}级`:'';
 }
 
+/** 当前在校的四个年级，按学年起始年（8 月起算新学年）倒序。 */
+export function currentGradeCohorts(now:Date=new Date()):string[]{
+  const start=now.getMonth()>=7?now.getFullYear():now.getFullYear()-1;
+  return Array.from({length:4},(_,offset)=>String(start-offset));
+}
+
+/** 年级页签匹配；未填年级的记录在每个页签保留，避免静默漏课。 */
+export function matchesGrade(value:unknown,cohort:string):boolean{
+  const grade=normalizeCohort(value);
+  return !grade||grade===normalizeCohort(cohort);
+}
+
 export function stageRowMetrics(lanes:{task:{id:number};lane:number}[]){
   const cardHeight=84,laneStep=90;
   const rowHeight=Math.max(90,...lanes.map(({lane})=>lane*laneStep+cardHeight+4));

@@ -155,13 +155,11 @@ async def import_csv(entity_type: str, file: UploadFile = File(...), cohort: str
     if entity_type == "syllabus":
         raise HTTPException(status_code=410, detail='课程一体化导入已停用，请通过课程管理导入课程数据')
 
-    data_rows, parse_errors = parse_csv_content(text_content, entity_type)
-
-    # 从某个年级页签导入课程时，统一归属该年级，忽略文件中的适用年级。
-    target = target_cohort(cohort) if entity_type == 'courses' else None
-    if target:
-        for row in data_rows:
-            row['cohort'] = target
+    # 从某个年级页签导入时，课程/班级统一归属该年级，忽略文件中的年级列。
+    cohort_field = {'courses': 'cohort', 'classes': 'grade'}.get(entity_type)
+    target = target_cohort(cohort) if cohort_field else None
+    data_rows, parse_errors = parse_csv_content(
+        text_content, entity_type, {cohort_field: target} if target else None)
 
     if parse_errors and not data_rows:
         return {"success": False, "errors": parse_errors, "imported": 0}

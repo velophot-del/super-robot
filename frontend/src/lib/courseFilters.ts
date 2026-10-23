@@ -1,14 +1,10 @@
-import { normalizeCohort } from './adminStageGrid.ts';
+import { normalizeCohort, currentGradeCohorts } from './adminStageGrid.ts';
+
+export { currentGradeCohorts };
 
 export type CourseFilters = Partial<Record<'department' | 'category' | 'course_type' | 'cohort', string>>;
 type Course = {department?: string | null; cohort?: string | null; course_type?: string; course_nature?: string;
   curriculum_sources?: {cohort?: string | null}[]};
-
-/** 当前在校的四个年级，按学年起始年（8 月起算新学年）倒序。 */
-export function currentGradeCohorts(now: Date = new Date()): string[] {
-  const start = now.getMonth() >= 7 ? now.getFullYear() : now.getFullYear() - 1;
-  return Array.from({length: 4}, (_, offset) => String(start - offset));
-}
 
 /** 课程自身标注的年级，以及培养方案来源中的年级。 */
 export function courseCohorts(course: Pick<Course, 'cohort' | 'curriculum_sources'>): string[] {

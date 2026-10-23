@@ -79,12 +79,13 @@ CSV_TEMPLATES = {
 }
 
 
-def parse_csv_content(content: str, entity_type: str) -> Tuple[List[Dict[str, Any]], List[str]]:
+def parse_csv_content(content: str, entity_type: str, overrides: dict | None = None) -> Tuple[List[Dict[str, Any]], List[str]]:
     """解析CSV内容
 
     Args:
         content: CSV文件内容（字符串）
         entity_type: 实体类型 (classes/teachers/courses/classrooms)
+        overrides: 解析后强制覆盖的字段（如从年级页签导入时统一归属年级）
 
     Returns:
         (parsed_data, errors) - 解析成功的数据行和错误信息列表
@@ -95,6 +96,7 @@ def parse_csv_content(content: str, entity_type: str) -> Tuple[List[Dict[str, An
     template = CSV_TEMPLATES[entity_type]
     required_fields = template["required_fields"]
     all_fields = required_fields + template["optional_fields"]
+    overrides = overrides or {}
 
     data_rows = []
     errors = []
@@ -121,8 +123,8 @@ def parse_csv_content(content: str, entity_type: str) -> Tuple[List[Dict[str, An
             if not found:
                 errors.append(f"警告: 无法识别的列名 '{header}'，已忽略")
 
-        # 检查必填字段是否存在
-        mapped_fields = set(header_map.values())
+        # 检查必填字段是否存在；页签指定的字段视为已提供。
+        mapped_fields = set(header_map.values()) | set(overrides)
         missing_required = [f for f in required_fields if f not in mapped_fields]
         if missing_required:
             missing_names = [field_name_map.get(f, f) for f in missing_required]
@@ -138,6 +140,10 @@ def parse_csv_content(content: str, entity_type: str) -> Tuple[List[Dict[str, An
                         field = header_map[orig_header]
                         value = value.strip() if value else None
                         parsed_row[field] = _convert_field_value(field, value)
+
+                # 页签指定的年级等字段优先，忽略文件中的同名列。
+                if overrides:
+                    parsed_row.update(overrides)
 
                 # 检查必填字段值
                 row_errors = []

@@ -1,5 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+
+test('grade tabs list in-school cohorts and keep unset class grades visible',async()=>{
+  const {currentGradeCohorts,matchesGrade}=await import('../src/lib/adminStageGrid.ts');
+  assert.deepEqual(currentGradeCohorts(new Date('2026-10-24T00:00:00')),['2026','2025','2024','2023']);
+  assert.deepEqual(currentGradeCohorts(new Date('2026-03-01T00:00:00')),['2025','2024','2023','2022']);
+  assert.equal(matchesGrade('2026级','2026'),true);
+  assert.equal(matchesGrade('2024','2026'),false);
+  assert.equal(matchesGrade(null,'2026'),true);
+});
 test('stage cells distinguish taught periods, reserved remainder, and free time',async()=>{
   const {stageCell}=await import('../src/lib/stageGrid.ts');
   const tasks=[{id:1,start_week:1,end_week:4,tail_weeks:0,slots:[{day:1,start:1,count:4,phase:'normal'}]}];
