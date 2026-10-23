@@ -9,6 +9,7 @@ from app.models.schedule import ScheduleEntry
 from app.models.course import Course
 from app.models.teacher import Teacher
 from app.models.planning import AcademicProgram
+from app.services.schedule_versions import resolve_schedule_version
 from app.schemas.class_info import ClassInfoCreate, ClassInfoUpdate, ClassInfoResponse
 
 router = APIRouter(prefix="/api/classes", tags=["班级管理"])
@@ -39,10 +40,12 @@ def get_class_courses(class_id: int, version: str = Query(None), db: Session = D
     if not cls:
         raise HTTPException(status_code=404, detail="班级不存在")
 
-    query = db.query(ScheduleEntry).filter(ScheduleEntry.class_id == class_id)
-    if version:
-        query = query.filter(ScheduleEntry.schedule_version == version)
-    entries = query.all()
+    # 未指定版本时固定到最新版本，避免多个版本的排课条目相互叠加。
+    version = resolve_schedule_version(db, version)
+    entries = [] if not version else db.query(ScheduleEntry).filter(
+        ScheduleEntry.class_id == class_id,
+        ScheduleEntry.schedule_version == version,
+    ).all()
 
     if not entries:
         return {
