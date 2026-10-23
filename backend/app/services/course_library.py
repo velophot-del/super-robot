@@ -3,6 +3,23 @@ from app.models.planning import CurriculumCourse,CurriculumDocument,OfferingUnit
 
 COURSE_TYPES = {'专业课','学科通识课','德育通识课','综合实践课','跨专业交叉课','国际课程'}
 COURSE_NATURES = {'必修课','限选课','任选课'}
+# 学科通识课/德育通识课属于公共课，默认不进入课程库列表与排课课程池。
+PUBLIC_COURSE_TYPES = ('学科通识课', '德育通识课')
+PUBLIC_COURSE_KEYWORDS = ('公共', '通识', '德育', '思政')
+
+
+def is_public_course(course_type=None):
+    """判断课程类型是否属于公共课；兼容历史未归一的“公共课/思政课”等写法。"""
+    text = (course_type or '').strip()
+    return text in PUBLIC_COURSE_TYPES or any(word in text for word in PUBLIC_COURSE_KEYWORDS)
+
+
+def public_course_clause():
+    """SQLAlchemy 条件：命中公共课；空类型按非公共课处理。"""
+    from sqlalchemy import func, or_
+    course_type = func.coalesce(Course.course_type, '')
+    return or_(course_type.in_(PUBLIC_COURSE_TYPES),
+               *[course_type.like(f'%{word}%') for word in PUBLIC_COURSE_KEYWORDS])
 
 
 def normalize_course_classification(raw_type='', raw_nature=''):

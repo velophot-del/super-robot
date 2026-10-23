@@ -7,6 +7,7 @@ from app.services.academic_scope import (
     department_matches,
     program_semester,
 )
+from app.services.course_library import is_public_course
 
 
 def courses_for_group(db, group, semester, courses=None):
@@ -14,6 +15,8 @@ def courses_for_group(db, group, semester, courses=None):
     rows = courses if courses is not None else db.query(Course).filter(Course.is_active.is_(True)).all()
     result = []
     for course in rows:
+        if is_public_course(course.course_type):
+            continue
         if course.semester != semester:
             continue
         if course.cohort and not cohort_matches(group.grade, course.cohort):

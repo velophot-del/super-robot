@@ -7,7 +7,7 @@ from typing import List
 from app.database import get_db
 from app.models.course import Course
 from app.models.planning import OfferingUnit
-from app.services.course_library import attach_sources
+from app.services.course_library import attach_sources, public_course_clause
 from app.schemas.course import CourseCreate, CourseUpdate, CourseResponse
 from app.services.auth import require_user
 from app.services.authorization import check
@@ -39,11 +39,15 @@ def list_courses(
     cohort: str = Query(None),
     course_nature: str = Query(None),
     include_inactive: bool = Query(False),
+    include_public: bool = Query(False),
     db: Session = Depends(get_db),
 ):
     query = db.query(Course)
     if not include_inactive:
         query = query.filter(Course.is_active.is_(True))
+    # 公共课默认从课程库列表隐藏；需要查看或恢复时显式传入 include_public=true。
+    if not include_public:
+        query = query.filter(~public_course_clause())
     if course_type:
         query = query.filter(Course.course_type == course_type)
     if department:
