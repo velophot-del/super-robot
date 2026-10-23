@@ -135,6 +135,11 @@ def load_account_access(user, db):
                    for g in db.query(AccountGrant).filter_by(user_id=user.id)]
     binding = db.get(TeacherBinding, user.id)
     user.teacher_id = binding.teacher_id if binding else None
+    from app.models.teacher import Teacher
+    from app.services.teacher_positions import position_grants
+    for grant in position_grants(db.get(Teacher, binding.teacher_id) if binding else None):
+        if grant not in user.grants:
+            user.grants.append(grant)
     setup = db.get(AccountSetup, user.id)
     user.password_change_required = bool(setup and not setup.password_changed)
     profile = db.get(TeacherProfile, binding.teacher_id) if binding else None
@@ -160,6 +165,7 @@ async def require_user(
         )
     allowed = {('GET', '/api/auth/me'), ('POST', '/api/auth/password'),
                ('GET', '/api/planning/self-profile'), ('PUT', '/api/planning/self-profile'),
+               ('GET', '/api/planning/self-profile/directions'),
                ('GET', '/api/planning/self-profile/courses'), ('GET', '/api/planning/self-profile/course-groups')}
     if (getattr(current_user, 'password_change_required', False) or getattr(current_user, 'profile_required', False)) and (request.method, request.url.path) not in allowed:
         raise HTTPException(403, {'code': 'ACCOUNT_SETUP_REQUIRED', 'msg': '请先修改初始密码并完善个人资料'})

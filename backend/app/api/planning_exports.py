@@ -60,7 +60,7 @@ def export_word(major:str=Query(min_length=1,max_length=200),start_date:date=Que
         if tasks:batches.append({**batch,'tasks':tasks})
     if not batches:raise HTTPException(404,'所选专业、周期和年级没有可导出的已发布课表')
     if len({academic_title(b['plan']) for b in batches})!=1:raise HTTPException(409,'所选快照学年学期不一致，请先核对排课周期设置')
-    # 全学院周期一个快照包含多个年级，按年级拆分分页。
+    # 全学院周期一个快照包含多个届次，按届次拆分分页。
     for batch in batches:
         by_cohort=defaultdict(list)
         for task in batch['tasks']:

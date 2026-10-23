@@ -7,6 +7,8 @@ import math
 from pathlib import Path
 from xml.etree import ElementTree as ET
 from zipfile import ZipFile, ZIP_DEFLATED
+from app.services.exam_weeks import exam_weeks_for
+from app.services.academic_scope import grade_label
 
 W='http://schemas.openxmlformats.org/wordprocessingml/2006/main'
 NS={'w':W}
@@ -118,7 +120,6 @@ def build_word_timetable(batches,major,prepared_on=None):
         # Pack rows conservatively. Word can repeat the two header rows on overflow.
         pages=[];page=[];used=0
         for label,items in sorted(by_group.items()):
-            from app.services.exam_weeks import exam_weeks_for
             exam=exam_weeks_for(plan,items[0].get('cohort') if items else None,label,weeks)
             runs=stage_runs(items,weeks,exam)
             heights=[]
@@ -134,7 +135,7 @@ def build_word_timetable(batches,major,prepared_on=None):
                 p=element('p');r=element('r');r.append(element('br',type='page'));p.append(r);body.append(p)
             page_index+=1
             college='视觉传达设计学院'
-            title=f"{college}{academic_title(plan)}专业课总表（{key[0]}级）"
+            title=f"{college}{academic_title(plan)}专业课总表（{grade_label(key[0])}）"
             body.append(paragraph(title,title_source,size=28,bold=True))
             body.append(paragraph(f"专业：{major}    制表时间：{prepared_on.year}年{prepared_on.month}月{prepared_on.day}日",size=18))
             table=element('tbl');props=deepcopy(source_table.find('w:tblPr',NS))

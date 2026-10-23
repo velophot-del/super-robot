@@ -119,6 +119,9 @@ class CurriculumDocument(Base, TimestampMixin):
     original = Column(LargeBinary, nullable=False)
     sha256 = Column(String, nullable=False)
     rows = Column(JSON, nullable=False)
+    program_id = Column(Integer, ForeignKey('academic_programs.id'), nullable=True)
+    offering_unit_id = Column(Integer, ForeignKey('offering_units.id'), nullable=True)
+    duration_semesters = Column(Integer, nullable=False, default=8)
     __table_args__ = (UniqueConstraint('major', 'cohort', 'revision'),)
 
 
@@ -128,6 +131,7 @@ class ActiveCurriculum(Base):
     major = Column(String, nullable=False)
     cohort = Column(String, nullable=False)
     document_id = Column(Integer, ForeignKey('curriculum_documents.id'), nullable=False)
+    program_id = Column(Integer, ForeignKey('academic_programs.id'), nullable=True)
     __table_args__ = (UniqueConstraint('major', 'cohort'),)
 
 
@@ -139,6 +143,87 @@ class CurriculumCourse(Base):
     course_id = Column(Integer,ForeignKey('courses.id'),nullable=False)
     metadata_json = Column(JSON,nullable=False)
     __table_args__ = (UniqueConstraint('document_id','row_code'),)
+
+
+class AcademicProgram(Base, TimestampMixin):
+    __tablename__ = 'academic_programs'
+    id = Column(Integer, primary_key=True)
+    code = Column(String(50), unique=True, nullable=False)
+    name = Column(String(100), unique=True, nullable=False)
+    duration_semesters = Column(Integer, nullable=False, default=8)
+    is_active = Column(Boolean, nullable=False, default=True)
+
+
+class OfferingUnit(Base, TimestampMixin):
+    __tablename__ = 'offering_units'
+    id = Column(Integer, primary_key=True)
+    code = Column(String(50), unique=True, nullable=False)
+    name = Column(String(100), unique=True, nullable=False)
+    is_active = Column(Boolean, nullable=False, default=True)
+
+
+class ImportPreviewBatch(Base, TimestampMixin):
+    __tablename__ = 'import_preview_batches'
+    id = Column(Integer, primary_key=True)
+    entity_type = Column(String(30), nullable=False)
+    filename = Column(String(200), nullable=False)
+    file_sha256 = Column(String(64), nullable=False)
+    token_hash = Column(String(64), nullable=False, unique=True)
+    status = Column(String(20), nullable=False, default='pending')
+    payload = Column(JSON, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+
+
+class TeacherScheduleConfirmation(Base, TimestampMixin):
+    __tablename__ = 'teacher_schedule_confirmations'
+    id = Column(Integer, primary_key=True)
+    snapshot_id = Column(Integer, ForeignKey('published_plans.id'), nullable=False)
+    plan_id = Column(Integer, ForeignKey('academic_plans.id'), nullable=False)
+    task_id = Column(Integer, nullable=False)
+    teacher_id = Column(Integer, ForeignKey('teachers.id'), nullable=False)
+    status = Column(String(30), nullable=False)
+    note = Column(String(500), nullable=True)
+
+
+class ScheduleChangeRequest(Base, TimestampMixin):
+    __tablename__ = 'schedule_change_requests'
+    id = Column(Integer, primary_key=True)
+    snapshot_id = Column(Integer, ForeignKey('published_plans.id'), nullable=False)
+    plan_id = Column(Integer, ForeignKey('academic_plans.id'), nullable=False)
+    task_id = Column(Integer, nullable=False)
+    teacher_id = Column(Integer, ForeignKey('teachers.id'), nullable=False)
+    reason = Column(String(1000), nullable=False)
+    desired_change = Column(String(1000), nullable=True)
+
+
+class ScheduleChangeDecision(Base, TimestampMixin):
+    __tablename__ = 'schedule_change_decisions'
+    id = Column(Integer, primary_key=True)
+    request_id = Column(Integer, ForeignKey('schedule_change_requests.id'), nullable=False)
+    admin_actor = Column(String(120), nullable=False)
+    decision = Column(String(20), nullable=False)
+    reason = Column(String(1000), nullable=True)
+    revision_plan_id = Column(Integer, ForeignKey('academic_plans.id'), nullable=True)
+
+
+class TeacherNotification(Base, TimestampMixin):
+    __tablename__ = 'teacher_notifications'
+    id = Column(Integer, primary_key=True)
+    teacher_id = Column(Integer, ForeignKey('teachers.id'), nullable=False)
+    plan_id = Column(Integer, ForeignKey('academic_plans.id'), nullable=False)
+    kind = Column(String(40), nullable=False)
+    payload = Column(JSON, nullable=False)
+
+
+class AutoSchedulePreview(Base, TimestampMixin):
+    __tablename__ = 'auto_schedule_previews'
+    id = Column(Integer, primary_key=True)
+    plan_id = Column(Integer, ForeignKey('academic_plans.id'), nullable=False)
+    plan_revision = Column(Integer, nullable=False)
+    algorithm = Column(String(30), nullable=False)
+    payload = Column(JSON, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    used_at = Column(DateTime, nullable=True)
 
 
 class TeacherWorkloadEstimate(Base):

@@ -23,6 +23,7 @@ from app.services.explanation import ExplanationGenerator
 from app.services.optimization import ConstraintLearningService
 from app.services.export_service import ExportService
 from app.services.schedule_versions import resolve_schedule_version
+from app.services.course_library import is_public_course
 
 router = APIRouter(prefix="/api/schedules", tags=["排课管理"])
 
@@ -65,7 +66,8 @@ def generate_schedule(request: ScheduleRequest, db: Session = Depends(get_db)):
     courses_query = db.query(Course)
     if request.course_ids:
         courses_query = courses_query.filter(Course.id.in_(request.course_ids))
-    courses = courses_query.all()
+    # 公共课保留在课程库中供查阅，但不进入排课池。
+    courses = [c for c in courses_query.all() if not is_public_course(c.course_type)]
 
     teachers_query = db.query(Teacher)
     if request.teacher_ids:
@@ -76,7 +78,9 @@ def generate_schedule(request: ScheduleRequest, db: Session = Depends(get_db)):
     # 传入全部规则：启用规则参与优化，停用规则用于关闭对应的内置默认检查
     constraints = db.query(ConstraintRule).all()
 
-    if not courses or not teachers or not classes or not classrooms:
+    if not courses:
+        raise HTTPException(status_code=400, detail="课程库中没有参与排课的专业课程（公共课已从排课池排除）")
+    if not teachers or not classes or not classrooms:
         raise HTTPException(status_code=400, detail="请先完善基础数据（课程、教师、班级、教室）")
 
     # 转换为字典

@@ -1,11 +1,15 @@
 """数据导入导出API"""
 import json
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from typing import List
 import io
+import hashlib
+import secrets
+from datetime import datetime, timedelta
+from pydantic import BaseModel, Field
 from urllib.parse import quote
 
 from app.database import get_db
@@ -14,15 +18,100 @@ from app.models.teacher import Teacher
 from app.models.course import Course
 from app.models.classroom import Classroom
 from app.models.schedule import ScheduleEntry
-from app.utils.csv_parser import parse_csv_content, generate_csv_template, parse_syllabus_csv
+from app.models.planning import AcademicProgram, OfferingUnit, ImportPreviewBatch, PlanningEvent
+from app.utils.csv_parser import parse_csv_content, generate_csv_template
 from app.services.validation import ValidationService
 from app.services.export_service import ExportService
 from app.services.conflict import ConflictDetector
 from app.services.explanation import ExplanationGenerator
 from app.services.schedule_versions import resolve_schedule_version
-from app.utils.departments import merge_department
+from app.services.auth import require_user
 
 router = APIRouter(prefix="/api/io", tags=["导入导出"])
+
+
+class XlsxConfirmInput(BaseModel):
+    preview_id: int = Field(ge=1)
+    token: str = Field(min_length=20, max_length=100)
+
+
+def target_cohort(value):
+    """课程导入的目标年级：去除“级/届”后缀，未提供时不覆盖文件中的适用年级。"""
+    text = (value or '').strip().removesuffix('级').removesuffix('届')
+    if not text:
+        return None
+    if not text.isdigit():
+        raise HTTPException(422, '目标年级须为入学年份，如2026')
+    return text
+
+
+@router.post('/xlsx/courses/preview', summary='预览课程 XLSX 导入')
+async def preview_courses_xlsx(file:UploadFile=File(...),cohort:str|None=Form(None),user=Depends(require_user),db:Session=Depends(get_db)):
+    from app.services.authorization import check
+    from app.services.spreadsheet_import import parse_course_workbook,course_row_issues,normalize_course_row
+    check(user,'admin')
+    target=target_cohort(cohort)
+    if not file.filename or not file.filename.lower().endswith('.xlsx'):
+        raise HTTPException(400,'请上传.xlsx格式的课程文件')
+    content=await file.read(10*1024*1024+1)
+    if len(content)>10*1024*1024:raise HTTPException(413,'文件不能超过10MB')
+    try:rows,parse_errors=parse_course_workbook(content)
+    except Exception as exc:raise HTTPException(422,f'Excel解析失败：{exc}') from exc
+    if not rows and not parse_errors:raise HTTPException(422,'Excel中没有可识别的课程数据')
+    seen=set();preview_rows=[];counts={'new':0,'duplicate':0,'invalid':0}
+    for row in rows:
+        # 从某个年级页签导入时，课程统一归属该年级，忽略文件中的适用年级。
+        if target:row['cohort']=target
+        issues,teacher_id,unit_id=course_row_issues(row,db)
+        code=str(row.get('course_code') or '').strip()
+        if code and (code in seen or db.query(Course.id).filter_by(course_code=code).first()):
+            if not issues:status='duplicate'
+            else:status='invalid'
+        elif issues:status='invalid'
+        else:status='new'
+        if code:seen.add(code)
+        counts[status]+=1
+        data=normalize_course_row(row,teacher_id,unit_id)
+        preview_rows.append({'source_sheet':row['_source_sheet'],'source_row':row['_source_row'],
+            'course_code':code,'name':row.get('name'),'status':status,'issues':issues,'data':data})
+    token=secrets.token_urlsafe(32)
+    batch=ImportPreviewBatch(entity_type='courses',filename=file.filename[:200],
+        file_sha256=hashlib.sha256(content).hexdigest(),token_hash=hashlib.sha256(token.encode()).hexdigest(),
+        status='pending',payload={'rows':preview_rows,'counts':counts,'parse_errors':parse_errors,'target_cohort':target},
+        expires_at=datetime.utcnow()+timedelta(minutes=30))
+    db.add(batch);db.commit();db.refresh(batch)
+    return {'preview_id':batch.id,'token':token,'expires_at':batch.expires_at,'counts':counts,
+            'rows':preview_rows,'parse_errors':parse_errors,'file_sha256':batch.file_sha256,'target_cohort':target}
+
+
+@router.post('/xlsx/courses/confirm', summary='确认导入课程 XLSX')
+def confirm_courses_xlsx(data:XlsxConfirmInput,user=Depends(require_user),db:Session=Depends(get_db)):
+    from app.services.authorization import check
+    from app.services.spreadsheet_import import normalize_course_row
+    from app.api.planning import write
+    check(user,'admin')
+    batch=db.get(ImportPreviewBatch,data.preview_id)
+    supplied=hashlib.sha256(data.token.encode()).hexdigest()
+    if not batch or batch.entity_type!='courses' or not secrets.compare_digest(batch.token_hash,supplied):
+        raise HTTPException(404,'导入预览不存在或令牌无效')
+    if batch.status!='pending':raise HTTPException(409,'该导入预览已确认或失效')
+    if batch.expires_at<datetime.utcnow():raise HTTPException(409,'导入预览已过期，请重新上传')
+    with write(db):
+        payload=dict(batch.payload);imported=0;skipped=0
+        target=payload.get('target_cohort')
+        for row in payload['rows']:
+            if row['status']!='new':skipped+=1;continue
+            if db.query(Course.id).filter_by(course_code=row['course_code']).first():
+                skipped+=1;continue
+            data=dict(row['data'])
+            if target:data['cohort']=target
+            db.add(Course(**data));imported+=1
+        batch.status='confirmed'
+        result={'imported':imported,'skipped':skipped,'file_sha256':batch.file_sha256}
+        payload['result']=result;batch.payload=payload
+        db.add(PlanningEvent(plan_id=None,actor=f"{'demo' if getattr(user,'is_demo',False) else 'user'}:{user.id}",
+            action='import_courses_xlsx',payload=result))
+    return {'success':True,**result,'summary':f'成功导入{imported}门课程，跳过重复或无效记录{skipped}条'}
 
 
 @router.get("/template/{entity_type}", summary="下载CSV导入模板")
@@ -39,8 +128,20 @@ def download_template(entity_type: str):
     )
 
 
+@router.get('/template/courses/xlsx', summary='下载课程 Excel 导入模板')
+def download_course_xlsx_template():
+    from openpyxl import Workbook
+    rows=list(__import__('csv').reader(io.StringIO(generate_csv_template('courses'))))
+    workbook=Workbook();sheet=workbook.active;sheet.title='课程数据'
+    for row in rows:sheet.append(row)
+    output=io.BytesIO();workbook.save(output);output.seek(0)
+    return StreamingResponse(output,media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition':'attachment; filename="courses_template.xlsx"'})
+
+
 @router.post("/csv/{entity_type}", summary="CSV批量导入")
-async def import_csv(entity_type: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def import_csv(entity_type: str, file: UploadFile = File(...), cohort: str | None = Form(None),
+                     db: Session = Depends(get_db)):
     """通过CSV文件批量导入实体数据"""
     if not file.filename or not file.filename.endswith('.csv'):
         raise HTTPException(status_code=400, detail="请上传CSV格式的文件")
@@ -51,14 +152,14 @@ async def import_csv(entity_type: str, file: UploadFile = File(...), db: Session
     except UnicodeDecodeError:
         text_content = content.decode('gbk')
 
-    # 课程大纲使用动态列解析器
     if entity_type == "syllabus":
-        data_rows, parse_errors = parse_syllabus_csv(text_content)
-        if parse_errors and not data_rows:
-            return {"success": False, "errors": parse_errors, "imported": 0}
-        return _import_syllabus(data_rows, db)
+        raise HTTPException(status_code=410, detail='课程一体化导入已停用，请通过课程管理导入课程数据')
 
-    data_rows, parse_errors = parse_csv_content(text_content, entity_type)
+    # 从某个年级页签导入时，课程/班级统一归属该年级，忽略文件中的年级列。
+    cohort_field = {'courses': 'cohort', 'classes': 'grade'}.get(entity_type)
+    target = target_cohort(cohort) if cohort_field else None
+    data_rows, parse_errors = parse_csv_content(
+        text_content, entity_type, {cohort_field: target} if target else None)
 
     if parse_errors and not data_rows:
         return {"success": False, "errors": parse_errors, "imported": 0}
@@ -114,8 +215,37 @@ async def import_csv(entity_type: str, file: UploadFile = File(...), db: Session
             if row.get(column.name) is not None:
                 seen[column.name][row[column.name]] = row_number
 
+    scope_errors=[]
+    if entity_type=='classes':
+        for row in pending_rows:
+            code=(row.pop('program_code',None) or '').strip()
+            program=db.query(AcademicProgram).filter_by(code=code).first() if code else None
+            if code and not program:
+                scope_errors.append(f"班级“{row.get('name')}”的专业编码“{code}”不存在")
+            elif program and row.get('department') and row['department'].strip()!=program.name:
+                scope_errors.append(f"班级“{row.get('name')}”的专业名称与编码{code}不一致")
+            elif program:
+                row['program_id']=program.id
+            elif row.get('department'):
+                exact=db.query(AcademicProgram).filter_by(name=row['department'].strip()).first()
+                if exact:row['program_id']=exact.id
+    elif entity_type=='courses':
+        for row in pending_rows:
+            code=(row.pop('offering_unit_code',None) or '').strip()
+            unit=db.query(OfferingUnit).filter_by(code=code).first() if code else None
+            if code and not unit:scope_errors.append(f"课程“{row.get('name')}”的开课单位编码“{code}”不存在")
+            elif unit:row['offering_unit_id']=unit.id
+    if scope_errors:
+        return {'success':False,'imported':0,'skipped':len(skipped_reasons),'total':len(data_rows),
+                'errors':scope_errors,'warnings':skipped_reasons,
+                'summary':'专业或开课单位编码校验未通过，本次未导入任何记录'}
+
     if entity_type == 'courses':
         # Resolve only rows that will be inserted; duplicate courses remain untouched.
+        from app.services.course_library import normalize_course_classification
+        for row in pending_rows:
+            row['course_type'],row['course_nature']=normalize_course_classification(
+                row.get('course_type'),row.get('course_nature'))
         import csv
         raw_rows=list(csv.DictReader(io.StringIO(text_content)))
         row_numbers=[]
@@ -338,123 +468,3 @@ def generate_report(version: str = Query(None), db: Session = Depends(get_db)):
     )
 
     return report
-
-
-def _import_syllabus(data_rows: list, db: Session) -> dict:
-    """导入课程大纲：一体化创建/更新班级和课程，自动按所属专业匹配
-
-    大纲CSV的每一行定义了「某班级上某课程，每周N课时」。
-    导入逻辑：
-    - 班级按名称去重：已存在则更新学生人数，不存在则新建
-    - 课程按编码去重：已存在则更新周课时/专业，不存在则新建
-    - 课程的 department 自动设为班级的 department，确保排课时匹配
-    """
-    classes_created = 0
-    classes_updated = 0
-    courses_created = 0
-    courses_updated = 0
-    errors = []
-
-    for i, row in enumerate(data_rows, start=2):
-        try:
-            class_name = str(row.get("class_name", "")).strip()
-            class_grade = str(row.get("class_grade", "大一")).strip()
-            department = str(row.get("department", "")).strip()
-            student_count = row.get("student_count")
-            if student_count is not None:
-                student_count = int(student_count) if str(student_count).isdigit() else None
-
-            course_name = str(row.get("course_name", "")).strip()
-            course_code = str(row.get("course_code", "")).strip()
-            semester_sessions = int(row.get("semester_sessions", 16))
-            weekly_sessions = int(row.get("weekly_sessions", 1))
-            hours_per_session = int(row.get("hours_per_session", 2))
-            total_hours = row.get("total_hours")
-            if total_hours is not None:
-                total_hours = int(total_hours) if str(total_hours).isdigit() else None
-            credits = row.get("credits")
-            if credits is not None:
-                credits = int(credits) if str(credits).isdigit() else None
-            course_type = str(row.get("course_type", "必修")).strip()
-            requires_consecutive = row.get("requires_consecutive", False)
-            if isinstance(requires_consecutive, str):
-                requires_consecutive = requires_consecutive.lower() in ("yes", "true", "是", "1")
-            requires_lab = row.get("requires_lab", False)
-            if isinstance(requires_lab, str):
-                requires_lab = requires_lab.lower() in ("yes", "true", "是", "1")
-            priority = row.get("priority", 0)
-            if priority is not None:
-                priority = int(priority) if str(priority).isdigit() else 0
-
-            if not class_name or not course_name or not course_code:
-                errors.append(f"第{i}行: 班级名称/课程名称/课程编码不能为空")
-                continue
-
-            # 查找或创建班级
-            existing_class = db.query(ClassInfo).filter(ClassInfo.name == class_name).first()
-            if existing_class:
-                existing_class.grade = class_grade
-                if department:
-                    existing_class.department = department
-                if student_count is not None:
-                    existing_class.student_count = student_count
-                classes_updated += 1
-                class_obj = existing_class
-            else:
-                class_obj = ClassInfo(
-                    name=class_name, grade=class_grade,
-                    department=department or None,
-                    student_count=student_count or 0,
-                )
-                db.add(class_obj)
-                db.flush()
-                classes_created += 1
-
-            # 查找或创建课程（department 与班级保持一致）
-            existing_course = db.query(Course).filter(Course.course_code == course_code).first()
-            if existing_course:
-                existing_course.name = course_name
-                existing_course.semester_sessions = semester_sessions
-                existing_course.weekly_sessions = weekly_sessions
-                existing_course.hours_per_session = hours_per_session
-                existing_course.course_type = course_type
-                # 共享课程可能被多个专业使用：合并专业归属，而不是用最后一行覆盖
-                if department:
-                    existing_course.department = merge_department(
-                        existing_course.department, department)
-                if total_hours is not None:
-                    existing_course.total_hours = total_hours
-                if credits is not None:
-                    existing_course.credits = credits
-                existing_course.requires_consecutive = bool(requires_consecutive)
-                existing_course.requires_lab = bool(requires_lab)
-                existing_course.priority = priority
-                courses_updated += 1
-            else:
-                course_obj = Course(
-                    name=course_name, course_code=course_code,
-                    course_type=course_type, semester_sessions=semester_sessions,
-                    weekly_sessions=weekly_sessions, hours_per_session=hours_per_session,
-                    total_hours=total_hours, credits=credits or 2,
-                    requires_consecutive=bool(requires_consecutive),
-                    requires_lab=bool(requires_lab),
-                    priority=priority, department=department or None,
-                )
-                db.add(course_obj)
-                db.flush()
-                courses_created += 1
-
-        except Exception as e:
-            errors.append(f"第{i}行处理失败: {str(e)}")
-
-    db.commit()
-
-    return {
-        "success": len(errors) == 0,
-        "imported": len(data_rows),
-        "errors": errors,
-        "summary": (
-            f"大纲导入完成：新建班级 {classes_created} 个、更新班级 {classes_updated} 个，"
-            f"新建课程 {courses_created} 门、更新课程 {courses_updated} 门"
-        ),
-    }

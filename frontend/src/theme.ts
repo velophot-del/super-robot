@@ -6,23 +6,23 @@ import type { ThemeConfig } from 'antd';
 const theme: ThemeConfig = {
   token: {
     // === 品牌色 (Stripe 电光紫) ===
-    colorPrimary: '#533afd',
-    colorPrimaryHover: '#665efd',
-    colorPrimaryActive: '#4434d4',
-    colorPrimaryBg: '#f0eeff',
-    colorPrimaryBgHover: '#e6e2ff',
+    colorPrimary: '#202124',
+    colorPrimaryHover: '#42454a',
+    colorPrimaryActive: '#101114',
+    colorPrimaryBg: '#f0f1f3',
+    colorPrimaryBgHover: '#e7e9ed',
 
     // === 文字色 (Stripe ink 深蓝墨色) ===
-    colorText: '#0d253d',
+    colorText: '#252830',
     colorTextSecondary: '#273951',
     colorTextTertiary: '#64748d',
     colorTextQuaternary: '#61718a',
 
     // === 表面色 ===
     colorBgContainer: '#ffffff',
-    colorBgLayout: '#f6f9fc',
+    colorBgLayout: '#f4f5f7',
     colorBgElevated: '#ffffff',
-    colorBgSpotlight: '#0d253d',
+    colorBgSpotlight: '#252830',
 
     // === 边框 ===
     colorBorder: '#e3e8ee',
@@ -32,7 +32,7 @@ const theme: ThemeConfig = {
     colorSuccess: '#10b981',
     colorWarning: '#f59e0b',
     colorError: '#ea2261',
-    colorInfo: '#533afd',
+    colorInfo: '#202124',
 
     // === 字体 ===
     fontFamily: `"Inter", -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif`,
@@ -76,23 +76,23 @@ const theme: ThemeConfig = {
     },
     Table: {
       borderRadius: 8,
-      headerBg: '#f6f9fc',
-      headerColor: '#0d253d',
-      rowHoverBg: '#f6f9fc',
+      headerBg: '#f4f5f7',
+      headerColor: '#252830',
+      rowHoverBg: '#f4f5f7',
       borderColor: '#e3e8ee',
     },
     Menu: {
       itemBg: 'transparent',
       subMenuItemBg: 'transparent',
-      darkItemBg: '#0d253d',
+      darkItemBg: '#ffffff',
       darkSubMenuItemBg: '#152d47',
       darkItemColor: '#c8d2dc',
-      darkItemSelectedBg: '#533afd',
+      darkItemSelectedBg: '#202124',
       darkItemHoverBg: 'rgba(83, 58, 253, 0.15)',
     },
     Layout: {
-      siderBg: '#0d253d',
-      triggerBg: '#0d253d',
+      siderBg: '#ffffff',
+      triggerBg: '#252830',
       triggerColor: '#c8d2dc',
     },
     Input: {
@@ -111,12 +111,12 @@ const theme: ThemeConfig = {
       borderRadius: 10,
     },
     Tabs: {
-      inkBarColor: '#533afd',
-      itemActiveColor: '#533afd',
-      itemHoverColor: '#665efd',
+      inkBarColor: '#202124',
+      itemActiveColor: '#202124',
+      itemHoverColor: '#42454a',
     },
     Progress: {
-      defaultColor: '#533afd',
+      defaultColor: '#202124',
     },
   },
 };

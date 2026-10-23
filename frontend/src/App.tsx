@@ -10,7 +10,8 @@ import ClassesPage from './pages/DataManagement/ClassesPage';
 import TeachersPage from './pages/DataManagement/TeachersPage';
 import CoursesPage from './pages/DataManagement/CoursesPage';
 import ClassroomsPage from './pages/DataManagement/ClassroomsPage';
-import ImportPage from './pages/DataManagement/ImportPage';
+import AISettingsPage from './pages/AISettingsPage';
+import DataDownloadPage from './pages/DataDownloadPage';
 import AdminHistoryPage from './pages/AdminHistoryPage';
 import TeacherMatchPage from './pages/TeacherMatchPage';
 import TeacherTimetablePage from './pages/TeacherTimetablePage';
@@ -19,7 +20,6 @@ import DebugPage from './pages/DebugPage';
 import { can, requiresAccountSetup } from './lib/accessPolicy';
 import PlanningWorkspace, { ManagementPlanningWorkspace } from './pages/PlanningWorkspace';
 import TeacherProfilePage from './pages/TeacherProfilePage';
-import CurriculumMaterialsPage from './pages/CurriculumMaterialsPage';
 
 function ManagementRoute() {
   const { user } = useAuth();
@@ -89,12 +89,12 @@ export default function App() {
                 <Route path="/planning/review" element={<ReviewWorkspaceRoute />} />
                 <Route path="/profile" element={<TeacherProfilePage />} />
                 <Route element={<ManagementRoute />}>
-                <Route path="/materials" element={<CurriculumMaterialsPage />} />
                 <Route path="/data/classes" element={<ClassesPage />} />
                 <Route path="/data/teachers" element={<TeachersPage />} />
                 <Route path="/data/courses" element={<CoursesPage />} />
                 <Route path="/data/classrooms" element={<ClassroomsPage />} />
-                <Route path="/data/import" element={<ImportPage />} />
+                <Route path="/data/download" element={<DataDownloadPage />} />
+                <Route path="/settings/ai" element={<AISettingsPage />} />
                 </Route>
                 <Route path="/timetable" element={<TimetableRoute />} />
                 <Route path="*" element={<Navigate to="/planning" replace />} />

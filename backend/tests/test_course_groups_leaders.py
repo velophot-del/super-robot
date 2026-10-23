@@ -52,7 +52,7 @@ class CourseGroupsLeadersTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_leader_create_change_clear_invalid_and_teacher_denied(self):
         h=await self.headers()
-        created=await self.client.post('/api/courses/',headers=h,json={'name':'Course','course_code':'C1','leader_teacher_id':7})
+        created=await self.client.post('/api/courses/',headers=h,json={'name':'Course','course_code':'C1','semester':2,'leader_teacher_id':7})
         self.assertEqual(created.status_code,201,created.text)
         row=created.json();self.assertEqual(row['leader_teacher_id'],7)
         self.assertEqual(row['leader_teacher_name'],'Demo teacher')
@@ -96,20 +96,23 @@ class CourseGroupsLeadersTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('课程负责人（工号）',template.content.decode('utf-8-sig'))
         async def upload(content):
             return await self.client.post('/api/io/csv/courses',headers=h,files={'file':('courses.csv',content.encode(),'text/csv')})
-        imported=await upload('课程名称,课程编码,学期教学次数,课程负责人（工号）\nDesign,D1,16,TEST-7\n')
+        imported=await upload('课程名称,课程编码,上课学期,学期教学次数,课程负责人（工号）\nDesign,D1,2,16,TEST-7\n')
         self.assertEqual(imported.status_code,200,imported.text)
         self.assertTrue(imported.json()['success'],imported.text)
         self.assertEqual(self.db.query(Course).filter_by(course_code='D1').one().leader_teacher_id,7)
-        repeat=await upload('课程名称,课程编码,学期教学次数,课程负责人（工号）\nChanged,D1,16,UNKNOWN\n')
+        repeat=await upload('课程名称,课程编码,上课学期,学期教学次数,课程负责人（工号）\nChanged,D1,2,16,UNKNOWN\n')
         self.assertEqual(repeat.json()['skipped'],1,repeat.text)
         self.assertEqual(self.db.query(Course).filter_by(course_code='D1').one().leader_teacher_id,7)
-        bad=await upload('课程名称,课程编码,学期教学次数,课程负责人（工号）\nGood,D2,16,TEST-7\nBad,D3,16,UNKNOWN\n')
+        bad=await upload('课程名称,课程编码,上课学期,学期教学次数,课程负责人（工号）\nGood,D2,2,16,TEST-7\nBad,D3,2,16,UNKNOWN\n')
         self.assertFalse(bad.json()['success'],bad.text)
         self.assertIn('第3行',str(bad.json()))
         self.assertIsNone(self.db.query(Course).filter_by(course_code='D2').first())
-        old=await upload('课程名称,课程编码,学期教学次数\nOld,D4,16\n')
-        self.assertTrue(old.json()['success'],old.text)
-        self.assertIsNone(self.db.query(Course).filter_by(course_code='D4').one().leader_teacher_id)
+        missing_semester=await upload('课程名称,课程编码,学期教学次数\nOld,D4,16\n')
+        self.assertFalse(missing_semester.json()['success'],missing_semester.text)
+        self.assertIn('上课学期',str(missing_semester.json()))
+        current=await upload('课程名称,课程编码,上课学期,学期教学次数\nOld,D4,2,16\n')
+        self.assertTrue(current.json()['success'],current.text)
+        self.assertEqual(self.db.query(Course).filter_by(course_code='D4').one().semester,2)
 
 
     async def test_first_login_can_read_course_group_options_before_setup(self):

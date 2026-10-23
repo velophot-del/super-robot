@@ -118,6 +118,17 @@ npm run dev -- --host 127.0.0.1 --port 5173 --strictPort
 - 启动自动创建数据库表；默认数据库位置相对于 `backend` 工作目录。
 - 执行后端命令时显式设置 `DEBUG=false`，避免宿主环境中的同名变量导致配置解析失败。
 
+### AI 排课分析（可选）
+
+管理员点击左侧底部的齿轮「AI 设置」，选择服务商（DeepSeek、通义千问、月之暗面、智谱、自定义 OpenAI 兼容或 Anthropic），填写 API Key 后保存即可。
+
+- 「课程表编排」页的「AI 排课分析」会基于当前周期的任务、教师、地点与考试周数据生成风险和建议。
+- 「匹配与审核」页的「AI 排序并自动落位」会先读取当前匹配权重与候选评分，由模型重新排序候选后自动落位；落位前仍执行教师意愿、回避与容量校验。未配置、调用失败或结果无法解析时按规则排序落位。
+- 未配置服务、密钥无效、超时或服务异常时，自动回退到规则分析，功能不受影响。
+- 密钥使用 `SECRET_KEY` 派生的密钥加密后保存在数据库；接口只返回掩码，不会下发到浏览器。更换 `SECRET_KEY` 后需要重新填写。
+- 也可通过环境变量 `ANTHROPIC_API_KEY` 使用 Anthropic（数据库未配置时的回退）；`ANTHROPIC_MODEL`、`ANTHROPIC_BASE_URL`、`AI_TIMEOUT_SECONDS` 可选。
+- 接口 `GET/PUT /api/ai/config`、`POST /api/ai/config/test`、`POST /api/planning/plans/{id}/ai-review` 仅管理员可用。
+
 ### 登录与授权
 
 首次运行可在 `backend` 目录创建管理员种子账户（交互式输入密码，重复执行不会覆盖已有密码，也不认领同名普通账号）：

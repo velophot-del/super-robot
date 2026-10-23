@@ -4,7 +4,11 @@ from fastapi import Depends, HTTPException
 def can(user, action: str, resource: dict | None = None) -> bool:
     resource = resource or {}
     for grant in getattr(user, 'grants', []):
-        if grant['capability'] != action:
+        capability = grant['capability']
+        # 教研室主任只获得其授权专业方向内的审核权，不继承管理员或发布职能。
+        if capability != action and not (action == 'review' and capability == 'lead'):
+            continue
+        if capability == 'lead' and grant.get('scope') != 'dept':
             continue
         if grant['scope'] == 'all':
             return True

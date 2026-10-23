@@ -32,6 +32,9 @@ class AccountOnboardingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.get('/api/planning/plans',headers=headers)).status_code,403)
         self.assertEqual((await self.client.get('/api/my/timetable',headers=headers)).status_code,403)
         self.assertEqual((await self.client.get('/api/planning/self-profile',headers=headers)).status_code,200)
+        directions=await self.client.get('/api/planning/self-profile/directions',headers=headers)
+        self.assertEqual(directions.status_code,200,directions.text)
+        self.assertIsInstance(directions.json(),list)
         for payload in [{'current_password':'wrong','new_password':'NewPassword123'}, {'current_password':'123456','new_password':'123456'}]:
             self.assertNotEqual((await self.client.post('/api/auth/password',headers=headers,json=payload)).status_code,200)
         changed=await self.client.post('/api/auth/password',headers=headers,json={'current_password':'123456','new_password':'NewPassword123'})

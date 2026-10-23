@@ -19,10 +19,13 @@ def main():
         user=db.get(User,args.user_id)
         if not user:raise SystemExit('指定账号不存在')
         if args.scope in {'dept','course'} and not args.scope_id:raise SystemExit('必须明确课程代码或课程所属教研室')
+        if args.capability=='lead' and args.scope!='dept':raise SystemExit('教研室主任职能必须限定到dept范围')
         binding=db.get(TeacherBinding,user.id)
         if args.teacher_id and not db.get(Teacher,args.teacher_id):raise SystemExit('教师不存在')
         if args.capability=='teaching' and not args.teacher_id and not binding:raise SystemExit('教学职能需要绑定教师')
-        print(f'账号{user.id} {user.username}: {args.capability}@{args.scope} {args.scope_id}，绑定教师{args.teacher_id or (binding.teacher_id if binding else "无")}')
+        if args.capability=='lead' and not args.teacher_id and not binding:raise SystemExit('教研室主任必须绑定教师，并同时具有本人教学职能')
+        bundle='，并授予本人教学职能' if args.capability=='lead' else ''
+        print(f'账号{user.id} {user.username}: {args.capability}@{args.scope} {args.scope_id}{bundle}，绑定教师{args.teacher_id or (binding.teacher_id if binding else "无")}')
         if not args.apply:print('预览完成；未修改。明确确认后添加 --apply 才生效。');return
         if args.teacher_id:
             if binding and binding.teacher_id!=args.teacher_id:raise SystemExit('已有不同教师绑定，不能静默覆盖')
@@ -31,6 +34,9 @@ def main():
             if not binding:db.add(TeacherBinding(user_id=user.id,teacher_id=args.teacher_id))
         exists=db.query(AccountGrant).filter_by(user_id=user.id,capability=args.capability,scope=args.scope,scope_id=args.scope_id).first()
         if not exists:db.add(AccountGrant(user_id=user.id,capability=args.capability,scope=args.scope,scope_id=args.scope_id))
+        if args.capability=='lead':
+            teaching=db.query(AccountGrant).filter_by(user_id=user.id,capability='teaching',scope='self',scope_id='').first()
+            if not teaching:db.add(AccountGrant(user_id=user.id,capability='teaching',scope='self',scope_id=''))
         db.commit();print('已写入明确授权')
 
 

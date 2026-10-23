@@ -8,6 +8,14 @@ class ExportService:
     """报表导出服务"""
 
     @staticmethod
+    def _text_cell(worksheet, row: int, column: int, value):
+        """写入单元格；用户录入的字符串强制按文本保存，避免以 = 开头的值被 Excel 当作公式执行。"""
+        cell = worksheet.cell(row=row, column=column, value=value)
+        if isinstance(value, str):
+            cell.data_type = "s"
+        return cell
+
+    @staticmethod
     def export_to_excel(schedule_entries: List[Dict], metadata: Dict = None) -> bytes:
         """导出排课方案到Excel格式
 
@@ -75,7 +83,7 @@ class ExportService:
                 entry.get("status", "confirmed"),
             ]
             for col, value in enumerate(row_data, 1):
-                cell = ws_all.cell(row=i, column=col, value=value)
+                cell = ExportService._text_cell(ws_all, i, col, value)
                 cell.alignment = Alignment(horizontal="center")
                 cell.border = thin_border
 
@@ -100,7 +108,7 @@ class ExportService:
             ]
             for i, row in enumerate(stats_data, 1):
                 for j, val in enumerate(row, 1):
-                    cell = ws_stats.cell(row=i, column=j, value=val)
+                    cell = ExportService._text_cell(ws_stats, i, j, val)
                     if i == 1:
                         cell.font = Font(bold=True, size=14)
 
@@ -137,14 +145,14 @@ class ExportService:
         current_row = 1
         for group_name, group_entries in sorted(groups.items()):
             # 分组标题
-            cell = worksheet.cell(row=current_row, column=1, value=f"{group_name}")
+            cell = ExportService._text_cell(worksheet, current_row, 1, f"{group_name}")
             cell.font = Font(bold=True, size=12)
             current_row += 1
 
             # 表头
             headers = ["节次"] + [day_names.get(d, f"周{d}") for d in range(1, 6)]
             for col, header in enumerate(headers, 1):
-                cell = worksheet.cell(row=current_row, column=col, value=header)
+                cell = ExportService._text_cell(worksheet, current_row, col, header)
                 cell.font = header_font
                 cell.fill = header_fill
                 cell.alignment = Alignment(horizontal="center")
@@ -153,8 +161,9 @@ class ExportService:
 
             # 数据行
             for period in range(1, max_period + 1):
-                worksheet.cell(row=current_row, column=1, value=f"第{period}节").border = thin_border
-                worksheet.cell(row=current_row, column=1).alignment = Alignment(horizontal="center")
+                label = ExportService._text_cell(worksheet, current_row, 1, f"第{period}节")
+                label.border = thin_border
+                label.alignment = Alignment(horizontal="center")
 
                 for day in range(1, 6):
                     # 找该时间段的所有课程
@@ -167,7 +176,7 @@ class ExportService:
                         f"{e.get('course_name', '')}\n{e.get('teacher_name', '')}\n{e.get('classroom_name', '')}"
                         for e in cell_entries
                     ])
-                    cell = worksheet.cell(row=current_row, column=day + 1, value=cell_text)
+                    cell = ExportService._text_cell(worksheet, current_row, day + 1, cell_text)
                     cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
                     cell.border = thin_border
                     if period % 2 == 0:

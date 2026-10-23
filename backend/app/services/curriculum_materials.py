@@ -13,6 +13,7 @@ ALIASES={
     'credits':['学分','credits'], 'required_hours':['总学时','总课时','计划学时','学时','学时分配总计','学时分配合计','学时数总计','学时数合计','学时总计','学时合计','required_hours'],
     'semester':['开课学期','上课学期','建议学期','建议修读学期','建议开课学期','开设学期','学期','semester'],
     'category':['课程性质','课程类别','category'],
+    'course_type':['课程类型','course_type'],
     'weekly_hours':['周课时','周学时','weekly_hours'],
     'teaching_weeks':['上课周数','授课周数','teaching_weeks'],
     'notes':['备注','说明','notes'],
@@ -120,7 +121,7 @@ def semester_number(value):
 def extract_rows(filename,content,scope=''):
     """解析课程表格。
 
-    `scope` 用于生成系统内部课程编码。它必须标识培养方案（专业/届次/修订号），
+    `scope` 用于生成系统内部课程编码。它必须标识培养方案（专业/年级/修订号），
     否则不同专业中相同的表号、行号和课程名会生成相同编码并互相冲突。
     """
     if len(content)>10*1024*1024:raise HTTPException(413,'文件超过10MiB')
@@ -178,6 +179,17 @@ def extract_rows(filename,content,scope=''):
                     header=mapping;labels=values;continue
             if not header or not any(values):continue
             record={k:values[i] if i is not None and i<len(values) else '' for k,i in header.items()}
+            record.setdefault('course_type','')
+            legacy_category=record.get('category','')
+            record['category']='任选课' if '任选' in legacy_category else '限选课' if '限选' in legacy_category else '必修课'
+            source_type=record['course_type'] or legacy_category
+            if source_type in {'专业课','学科通识课','德育通识课','综合实践课','跨专业交叉课','国际课程'}:record['course_type']=source_type
+            elif '国际' in source_type:record['course_type']='国际课程'
+            elif '跨专业' in source_type or '交叉' in source_type:record['course_type']='跨专业交叉课'
+            elif '德育' in source_type or '思政' in source_type:record['course_type']='德育通识课'
+            elif '实践' in source_type:record['course_type']='综合实践课'
+            elif '通识' in source_type or '公共' in source_type:record['course_type']='学科通识课'
+            elif source_type:record['course_type']='专业课'
             # Summary and explanatory rows have no value in the course-name column.
             if not record['name'] and suffix!='xlsx':
                 if record['code']:errors.append(f'{location}行{line_no}：课程名称必填')

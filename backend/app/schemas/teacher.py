@@ -1,6 +1,6 @@
 """教师相关Pydantic模式"""
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, Literal
 from datetime import datetime
 
 
@@ -10,6 +10,8 @@ class TeacherBase(BaseModel):
     teacher_code: str = Field(..., min_length=1, max_length=30, description="教师工号")
     department: Optional[str] = Field(None, max_length=100)
     title: Optional[str] = Field(None, max_length=50)
+    position: Optional[Literal['教师', '教研室主任', '教研室副主任', '院长', '副院长']] = '教师'
+    review_major: Optional[str] = Field(None, max_length=100)
     email: Optional[str] = Field(None, max_length=100)
     phone: Optional[str] = Field(None, max_length=30)
     max_weekly_hours: Optional[int] = Field(default=20, ge=0, le=40)
@@ -30,6 +32,8 @@ class TeacherUpdate(BaseModel):
     teacher_code: Optional[str] = Field(None, min_length=1, max_length=30)
     department: Optional[str] = None
     title: Optional[str] = None
+    position: Optional[Literal['教师', '教研室主任', '教研室副主任', '院长', '副院长']] = None
+    review_major: Optional[str] = Field(None, max_length=100)
     email: Optional[str] = None
     phone: Optional[str] = None
     max_weekly_hours: Optional[int] = Field(None, ge=0, le=40)

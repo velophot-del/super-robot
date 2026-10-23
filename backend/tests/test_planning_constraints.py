@@ -19,6 +19,60 @@ class PlanningConstraintTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(can(user,'review',{'department':'Other'}))
         self.assertFalse(can(user,'publish'))
 
+    async def test_department_head_reviews_only_its_department_and_is_not_admin(self):
+        user=SimpleNamespace(role='teacher',teacher_id=7,grants=[
+            {'capability':'teaching','scope':'self','scope_id':''},
+            {'capability':'lead','scope':'dept','scope_id':'视觉传达设计'},
+        ])
+        self.assertTrue(can(user,'teaching',{'teacher_id':7}))
+        self.assertTrue(can(user,'review',{'department':'视觉传达设计'}))
+        self.assertFalse(can(user,'review',{'department':'包装设计'}))
+        self.assertFalse(can(user,'admin'))
+        self.assertFalse(can(user,'publish'))
+        user.grants=[{'capability':'lead','scope':'all','scope_id':''}]
+        self.assertFalse(can(user,'review',{'department':'视觉传达设计'}))
+
+    async def test_department_head_cannot_run_full_cycle_matching(self):
+        from datetime import datetime
+        from fastapi import HTTPException
+        from app.models.planning import AcademicPlan, TeachingTask
+        from app.api.planning import match
+        plan=AcademicPlan(id=91,name='Review scope',start_date=date(2027,2,1),weeks=20,
+            deadline=datetime(2027,1,1),state='open',revision=1,rule_confirmed=True,
+            settings={'groups':['G']})
+        self.db.add(plan);self.db.flush()
+        self.db.add(TeachingTask(plan_id=plan.id,payload={'id':1,'name':'Course','code':'C',
+            'department':'Design','group':'G','start_week':1,'end_week':2,'teacher_ids':[]}))
+        self.db.commit()
+        user=SimpleNamespace(id=8,teacher_id=7,grants=[
+            {'capability':'lead','scope':'dept','scope_id':'Design'},
+            {'capability':'teaching','scope':'self','scope_id':''},
+        ])
+        with self.assertRaises(HTTPException) as raised:
+            match(plan.id,user,self.db)
+        self.assertEqual(raised.exception.status_code,403)
+
+    async def test_department_head_review_view_contains_only_scoped_tasks(self):
+        from datetime import datetime
+        from app.models.planning import AcademicPlan, TeachingTask
+        from app.api.planning import get_state
+        plan=AcademicPlan(id=92,name='Scoped review',start_date=date(2027,2,1),weeks=20,
+            deadline=datetime(2027,1,1),state='open',revision=1,
+            settings={'global':True,'groups':['G1','G2']})
+        self.db.add(plan);self.db.flush()
+        self.db.add_all([
+            TeachingTask(plan_id=plan.id,payload={'name':'Design course','code':'D','department':'Design','group':'G1','start_week':1,'end_week':2}),
+            TeachingTask(plan_id=plan.id,payload={'name':'Package course','code':'P','department':'Packaging','group':'G2','start_week':1,'end_week':2}),
+        ])
+        self.db.commit()
+        user=SimpleNamespace(id=8,teacher_id=7,grants=[
+            {'capability':'lead','scope':'dept','scope_id':'Design'},
+            {'capability':'teaching','scope':'self','scope_id':''},
+        ])
+        state=get_state(plan.id,user,self.db,review_only=True)
+        self.assertEqual([task['name'] for task in state['tasks']],['Design course'])
+        self.assertEqual(state['groups'],['G1'])
+
     async def test_unknown_profile_and_capacity_are_not_hidden_by_score(self):
         plan=AcademicPlan(id=1,start_date=date(2027,2,1),weeks=20)
         task={'id':1,'name':'Typography','code':'A','group':'G','required_hours':4,

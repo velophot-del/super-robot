@@ -118,6 +118,8 @@ export const courseApi = {
   create: (data: any) => apiClient.post('/courses/', data),
   update: (id: number, data: any) => apiClient.put(`/courses/${id}`, data),
   delete: (id: number) => apiClient.delete(`/courses/${id}`),
+  bulkUpdate: (ids: number[], updates: Record<string, unknown>) => apiClient.patch('/courses/bulk', { ids, updates }),
+  bulkRemove: (ids: number[]) => apiClient.delete('/courses/bulk', { data: { ids } }),
 };
 
 // ===== 教室 API =====
@@ -146,13 +148,17 @@ export const scheduleApi = {
 export const ioApi = {
   downloadTemplate: (entityType: string) =>
     apiClient.get(`/io/template/${entityType}`, { responseType: 'blob' }),
-  importCsv: (entityType: string, file: File) => {
+  importCsv: (entityType: string, file: File, cohort?: string) => {
     const formData = new FormData();
     formData.append('file', file);
+    if (cohort) formData.append('cohort', cohort);
     return apiClient.post(`/io/csv/${entityType}`, formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
   },
+  previewCoursesXlsx: (file:File, cohort?: string) => {const form=new FormData();form.append('file',file);if(cohort)form.append('cohort',cohort);return apiClient.post('/io/xlsx/courses/preview',form,{headers:{'Content-Type':'multipart/form-data'}});},
+  confirmCoursesXlsx: (preview_id:number,token:string) => apiClient.post('/io/xlsx/courses/confirm',{preview_id,token}),
+  downloadCoursesXlsxTemplate: () => apiClient.get('/io/template/courses/xlsx',{responseType:'blob'}),
   exportExcel: (version?: string) =>
     apiClient.get('/io/export/excel', { params: { version }, responseType: 'blob' }),
   exportPdf: (version?: string, viewType?: string) =>

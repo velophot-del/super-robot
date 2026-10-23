@@ -105,6 +105,7 @@ def validate_tasks(db, plan, tasks, check_slots=True):
     # Published plans reserve both rooms and student groups on actual dates.
     published_rows = [(other_plan, other)
                       for other_plan in db.query(AcademicPlan).filter(AcademicPlan.state == 'published', AcademicPlan.id != plan.id)
+                      if other_plan.id != (plan.settings or {}).get('supersedes_plan_id')
                       for other in db.query(TeachingTask).filter_by(plan_id=other_plan.id)]
     for other_plan, other in published_rows:
         data = task_dict(db, other)

@@ -22,6 +22,12 @@ class TeacherProfileTests(unittest.IsolatedAsyncioTestCase):
         p=(await self.client.get('/api/planning/self-profile',headers=h)).json()
         self.assertFalse(p['ready']);self.assertIn('擅长课程',p['missing'])
 
+    async def test_profile_direction_options_use_configured_five_directions(self):
+        directions=['视觉传达设计','包装设计','智能交互设计','数字艺术','时尚传播']
+        response=await self.client.get('/api/planning/self-profile/directions',headers=await self.headers())
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual(response.json(),directions)
+
     async def test_self_update_preserves_admin_fields_and_rejects_forgery_and_stale_save(self):
         self.db.add(TeacherProfile(teacher_id=7,revision=3,payload={'direction':'Admin direction','tags':['old'],'verified':True,
             'team_codes':['A'],'taught_codes':['B'],'weekly_limit':12,'course_limit':2,'external_hours':{'1':4}}));self.db.commit()

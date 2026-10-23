@@ -1,16 +1,17 @@
 from collections import defaultdict
+from datetime import datetime, timedelta
 from fastapi import APIRouter,Depends,HTTPException,Query
 from pydantic import BaseModel,Field,ConfigDict
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models.planning import AcademicPlan,TeachingTask,PeriodSlot,CurriculumDocument,ActiveCurriculum,CurriculumCourse
+from app.models.planning import AcademicPlan,TeachingTask,PeriodSlot,AutoSchedulePreview
 from app.models.course import Course
 from app.models.class_info import ClassInfo
 from app.services.auth import require_user
 from app.services.authorization import check
 from app.services.stage_planning import task_dict,validate_tasks,validate_student_limit
-from app.services.course_library import sync_courses
-from app.services.academic_scope import is_global, plan_term, program_semester, cohort_matches, department_matches, groups_for_curriculum
+from app.services.academic_scope import is_global, plan_term, groups_for_cycle
+from app.services.course_catalog import course_catalog_scope, course_pool_rows
 from app.services.exam_weeks import exam_weeks_for
 from app.api.planning import write,get_plan,tasks_for,event
 
@@ -25,6 +26,7 @@ class PlacementInput(BaseModel):
     document_id:int|None=None
     group:str=Field(min_length=1,max_length=100)
     start_week:int=Field(ge=1,le=20)
+    # 兼容旧客户端；实际周数始终取自课程库或现有任务，不再接受人工覆盖。
     duration:int|None=Field(None,ge=1,le=20)
 
 
@@ -33,48 +35,22 @@ class GroupsInput(BaseModel):
     groups:list[str]=Field(min_length=1,max_length=100)
 
 
-def active_document(db,plan):
-    config=plan.settings or {}
-    active=db.query(ActiveCurriculum).filter_by(major=config.get('major',''),cohort=config.get('cohort','')).first()
-    return db.get(CurriculumDocument,active.document_id) if active else None
+class AutoSchedulePreviewInput(BaseModel):
+    algorithm:str=Field('genetic',pattern='^(genetic|backtracking)$')
 
 
-def plan_documents(db,plan):
-    """返回本周期应参与的培养方案及各自的培养学期。
-
-    全学院周期包含所有已启用方案，并按各届次在全局学期中的培养学期筛选；
-    旧周期仍只使用其绑定的一份方案。
-    """
-    if not is_global(plan):
-        doc=active_document(db,plan)
-        return [(doc,(plan.settings or {}).get('semester'))] if doc else []
-    term=plan_term(plan);result=[]
-    for active in db.query(ActiveCurriculum).order_by(ActiveCurriculum.id):
-        doc=db.get(CurriculumDocument,active.document_id)
-        semester=program_semester(plan.start_date,term,active.cohort)
-        if doc and semester:result.append((doc,semester))
-    return result
+class AutoScheduleApplyInput(BaseModel):
+    preview_id:int=Field(ge=1)
 
 
 def pool_rows(db,plan):
-    documents=[];result=[]
-    allowed=(plan.settings or {}).get('groups') or []
-    global_cycle=is_global(plan)
-    for doc,semester in plan_documents(db,plan):
-        if not doc:continue
-        documents.append(doc)
-        links={l.row_code:l for l in db.query(CurriculumCourse).filter_by(document_id=doc.id)}
-        groups=groups_for_curriculum(db,doc.major,doc.cohort,allowed or None) if global_cycle else (
-            (plan.settings or {}).get('groups') or [])
-        for row in doc.rows:
-            if row.get('semester')!=semester or not row.get('schedulable',True) or (row.get('category') and not row['category'].startswith('专业')):continue
-            link=links.get(row['code'])
-            if not link:continue
-            course=db.get(Course,link.course_id)
-            if not course:continue
-            result.append({'id':course.id,'document_id':doc.id,'major':doc.major,'cohort':doc.cohort,
-                           'semester':semester,'groups':groups,**row})
-    return documents,result
+    settings=plan.settings or {}
+    if is_global(plan):
+        scope=course_catalog_scope(db,plan.start_date,plan_term(plan),settings.get('groups') or None)
+    else:
+        scope=course_catalog_scope(db,plan.start_date,plan_term(plan),settings.get('groups') or None,
+            settings.get('major'),settings.get('cohort'),settings.get('semester'))
+    return [],course_pool_rows(scope)
 
 
 def validate_spans(plan,tasks):
@@ -97,24 +73,36 @@ def validate_spans(plan,tasks):
 @router.get('/{plan_id}/course-pool')
 def course_pool(plan_id:int,user=Depends(require_user),db:Session=Depends(get_db)):
     check(user,'admin');plan=get_plan(db,plan_id);documents,rows=pool_rows(db,plan)
-    return {'document_id':documents[0].id if documents else None,
-            'document_ids':[doc.id for doc in documents],
-            'revision':documents[0].revision if len(documents)==1 else None,
+    return {'document_id':None,'document_ids':[],'revision':None,
             'global_cycle':is_global(plan),'courses':rows}
 
 
-@router.post('/{plan_id}/sync-course-pool')
-def sync_pool(plan_id:int,user=Depends(require_user),db:Session=Depends(get_db)):
-    check(user,'admin')
+@router.post('/{plan_id}/auto-schedule')
+def auto_schedule(plan_id:int,user=Depends(require_user),db:Session=Depends(get_db)):
+    check(user,'admin');plan=get_plan(db,plan_id)
+    from app.services.auto_placement import generate_auto_placement
+    return generate_auto_placement(db,plan,user)
+
+
+@router.post('/{plan_id}/auto-schedule/preview')
+def preview_auto_schedule(plan_id:int,data:AutoSchedulePreviewInput,user=Depends(require_user),db:Session=Depends(get_db)):
+    check(user,'admin');plan=get_plan(db,plan_id)
+    from app.services.auto_placement import build_auto_schedule_candidate
+    candidate=build_auto_schedule_candidate(db,plan,data.algorithm)
     with write(db):
-        plan=get_plan(db,plan_id);documents=[doc for doc,_ in plan_documents(db,plan) if doc]
-        if not documents:raise HTTPException(409,'尚无可用的已启用培养方案')
-        report={'added':0,'reused':0,'documents':len(documents)}
-        for doc in documents:
-            result=sync_courses(db,doc)
-            report['added']+=result.get('added',0);report['reused']+=result.get('reused',0)
-        event(db,user,'sync_course_library',report,plan.id)
-        return report
+        row=AutoSchedulePreview(plan_id=plan.id,plan_revision=plan.revision,algorithm=data.algorithm,
+            payload=candidate,expires_at=datetime.utcnow()+timedelta(minutes=30))
+        db.add(row);db.flush()
+        return {**candidate,'preview_id':row.id,'expires_at':row.expires_at.isoformat()+'Z',
+            'plan_revision':row.plan_revision}
+
+
+@router.post('/{plan_id}/auto-schedule/apply')
+def apply_auto_schedule(plan_id:int,data:AutoScheduleApplyInput,user=Depends(require_user),db:Session=Depends(get_db)):
+    check(user,'admin');plan=get_plan(db,plan_id);preview=db.get(AutoSchedulePreview,data.preview_id)
+    if not preview or preview.plan_id!=plan.id:raise HTTPException(404,'排课候选不存在')
+    from app.services.auto_placement import apply_auto_schedule_candidate
+    return apply_auto_schedule_candidate(db,plan,user,preview.payload,preview)
 
 
 @router.put('/{plan_id}/groups')
@@ -126,7 +114,16 @@ def update_groups(plan_id:int,data:GroupsInput,user=Depends(require_user),db:Ses
         if plan.revision!=data.revision:raise HTTPException(409,'版本已变化，请刷新')
         groups=list(dict.fromkeys(g.strip() for g in data.groups if g.strip()))
         if not groups or any(len(g)>100 for g in groups):raise HTTPException(422,'请填写有效班级名称')
-        if any(t.payload['group'] not in groups and t.payload.get('start_week') for t in db.query(TeachingTask).filter_by(plan_id=plan.id)):raise HTTPException(409,'已有排课的班级不能移除')
+        eligible=None
+        if is_global(plan):
+            eligible=set(groups_for_cycle(db,plan.start_date,plan_term(plan)))
+            known={row.name for row in db.query(ClassInfo).filter(ClassInfo.is_active.is_(True))}
+            if any(group in known and group not in eligible for group in groups):
+                raise HTTPException(422,'当前周期不能加入已毕业或未纳入培养方案的班级')
+        if any(t.payload['group'] not in groups and t.payload.get('start_week')
+               and (eligible is None or t.payload['group'] in eligible)
+               for t in db.query(TeachingTask).filter_by(plan_id=plan.id)):
+            raise HTTPException(409,'已有排课的班级不能移除')
         plan.settings={**(plan.settings or {}),'groups':groups}
         # 开放/匹配阶段增加班级不影响既有任务和志愿，不递增版本，避免已提交意愿失效。
         if plan.state=='draft':plan.revision+=1
@@ -147,35 +144,22 @@ def place_course(plan_id:int,data:PlacementInput,user=Depends(require_user),db:S
             task=db.get(TeachingTask,data.task_id)
             if not task or task.plan_id!=plan.id:raise HTTPException(404,'课程任务不存在')
             payload=dict(task.payload);meta=payload.get('source',{}).get('course_metadata',{})
-            duration=data.duration or ((payload['end_week']-payload['start_week']+1) if payload.get('start_week') else meta.get('teaching_weeks'))
+            duration=(payload['end_week']-payload['start_week']+1) if payload.get('start_week') else meta.get('teaching_weeks')
         else:
-            documents,rows=pool_rows(db,plan)
-            candidates=[row for row in rows if row['id']==data.course_id
-                        and (not data.document_id or row['document_id']==data.document_id)]
-            if len(candidates)>1 and data.group:
-                # 同一课程可能出现在多个培养方案；优先按班级所属专业与届次定位。
-                roster=db.query(ClassInfo).filter_by(name=data.group).first()
-                if roster:
-                    matched=[row for row in candidates if department_matches(roster.department,row['major'])
-                             and cohort_matches(roster.grade,row['cohort'])]
-                    if matched:candidates=matched
-            if not candidates:raise HTTPException(409,'该课程不属于本周期生效培养方案的可排课程，请先同步课程库')
-            if len(candidates)>1:raise HTTPException(422,'同名课程属于多个培养方案，请指定培养方案后再放置')
+            _,rows=pool_rows(db,plan)
+            candidates=[row for row in rows if row['id']==data.course_id and data.group in row.get('groups',[])]
+            if not candidates:raise HTTPException(409,'该课程不适用于本周期班级，请检查课程库中的专业、年级和上课学期')
             row=candidates[0]
-            if is_global(plan) and row.get('groups') and data.group not in row['groups']:
-                raise HTTPException(422,'该班级不属于此培养方案，请核对专业与届次')
-            doc=db.get(CurriculumDocument,row['document_id'])
             course=db.get(Course,data.course_id)
-            if not doc or not course:raise HTTPException(409,'培养方案或课程不存在，请刷新后重试')
-            if course.name!=row['name'] or course.total_hours!=row['required_hours'] or float(course.credits or 0)!=float(row['credits']):raise HTTPException(409,'课程库与培养方案属性不一致，请先核对')
+            if not course or not course.is_active:raise HTTPException(409,'课程已停用或不存在，请刷新课程库')
             task=next((db.get(TeachingTask,t['id']) for t in tasks
                        if t['code']==row['code'] and t['group']==data.group and not t.get('start_week')
-                       and (not is_global(plan) or (t.get('major')==row['major'] and t.get('cohort')==row['cohort']))),None)
+                       and t.get('source',{}).get('course_id')==course.id),None)
             payload=dict(task.payload) if task else {k:row[k] for k in ['name','code','credits','required_hours','direction','tags']}
             meta={k:v for k,v in row.items() if k not in {'id','document_id','major','cohort','groups'}}
-            duration=data.duration or row.get('teaching_weeks')
-            payload.update(source={'document_id':doc.id,'revision':doc.revision,'sha256':doc.sha256,'major':doc.major,'cohort':doc.cohort,'course_id':course.id,'course_metadata':meta})
-        if not duration:raise HTTPException(422,'方案未注明上课周数，请先明确课程占用周数')
+            duration=row.get('teaching_weeks')
+            payload.update(source={'course_id':course.id,'major':row['major'],'cohort':row['cohort'],'course_metadata':meta})
+        if not duration:raise HTTPException(422,'课程库未提供授课周数，请先在课程数据中补齐')
         old_group=payload.get('group')
         department=payload.get('department') or (row.get('major') if not data.task_id else '') or (plan.settings or {}).get('major','')
         payload.update(group=data.group,class_name=data.group,department=department,

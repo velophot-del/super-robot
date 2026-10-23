@@ -9,6 +9,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from app.services.word_timetable import stage_runs
 from app.services.exam_weeks import exam_weeks_for
+from app.services.academic_scope import grade_label
 
 
 def build_visual_excel(batches, title):
@@ -46,7 +47,7 @@ def build_visual_excel(batches, title):
             groups[group_key].append(task); group_plan[group_key]=plan
             details.append([task['name'],task['code'],task['group'],task['credits'],task['required_hours'],task['start_week'],task['end_week'],
                 '；'.join(f"{'尾段 ' if s.get('phase')=='tail' else ''}周{s['day']} 第{s['start']}—{s['start']+s['count']-1}节" for s in task.get('slots',[])),
-                task.get('room_name',''),'、'.join(task.get('teacher_names',[])),str(task.get('source',{})),task_major,task_cohort,plan.get('name',''),batch.get('snapshot_id'),plan.get('opening_date') or '未登记'])
+                task.get('room_name',''),'、'.join(task.get('teacher_names',[])),str(task.get('source',{})),task_major,grade_label(task_cohort),plan.get('name',''),batch.get('snapshot_id'),plan.get('opening_date') or '未登记'])
     row = 5
     for (major, cohort, group), tasks in sorted(groups.items()):
         # Parallel courses use separate lanes so narrow single-week cells remain legible.
@@ -70,7 +71,7 @@ def build_visual_excel(batches, title):
                 ws.cell(row,col).fill = PatternFill('solid',fgColor='EEEEEE' if lines == ('考试',) else 'F0EDFA' if any(lines) else 'FFFFFF')
             ws.row_dimensions[row].height = min(409, height)
             row += 1
-        for col, label in enumerate([major,cohort,group],1):
+        for col, label in enumerate([major,grade_label(cohort),group],1):
             ws.cell(first,col,label)
             if row-1>first:ws.merge_cells(start_row=first,end_row=row-1,start_column=col,end_column=col)
     line = Side(style='thin',color='D4D8E2')

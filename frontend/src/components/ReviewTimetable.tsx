@@ -14,8 +14,8 @@ type Props = {
   onAssign: (task: any, teacherIds: number[]) => void;
 };
 
-const CARD_HEIGHT = 172;
-const LANE_HEIGHT = 182;
+const CARD_HEIGHT = 140;
+const LANE_HEIGHT = 150;
 
 export default function ReviewTimetable({ plan, tasks, match, busy, canAssign, reason, onAssign }: Props) {
   const [editing, setEditing] = useState<any>(null);
@@ -65,10 +65,10 @@ export default function ReviewTimetable({ plan, tasks, match, busy, canAssign, r
     <div style={{ overflowX: 'auto', border: '1px solid #d9d9e3', borderRadius: 8 }}>
       <table aria-label="全学院实时课表" style={{ borderCollapse: 'collapse', width: '100%', minWidth: 200 + weeks * 120 }}>
         <colgroup><col style={{ width: 200 }} />{Array.from({ length: weeks }, (_, index) => <col key={index} style={{ width: 120 }} />)}</colgroup>
-        <thead><tr style={{ background: '#f2f0fb' }}>
+        <thead><tr style={{ background: '#f3f4f6' }}>
           <th style={{ border: '1px solid #d9d9e3', padding: 8 }}>专业 / 年级 / 教学组</th>
-          {Array.from({ length: weeks }, (_, index) => <th key={index} style={{ border: '1px solid #d9d9e3', padding: '5px 2px', fontSize: 11 }}>
-            第{index + 1}周<div style={{ fontWeight: 400, fontSize: 10 }}>{weekDates(plan.start_date, index + 1)}</div>
+          {Array.from({ length: weeks }, (_, index) => <th key={index} style={{ border: '1px solid #d9d9e3', padding: '5px 2px', fontSize: 12 }}>
+            第{index + 1}周<div style={{ fontWeight: 400, fontSize: 12 }}>{weekDates(plan.start_date, index + 1)}</div>
           </th>)}
         </tr></thead>
         <tbody>{rows.map(([key, group]) => {
@@ -89,17 +89,17 @@ export default function ReviewTimetable({ plan, tasks, match, busy, canAssign, r
                   const width = `${(task.end_week - task.start_week + 1) * 100 / weeks}%`;
                   return <div key={task.id} style={{
                     position: 'absolute', left, width, top: lane * LANE_HEIGHT + 5, height: CARD_HEIGHT,
-                    background: task.locked ? '#f0edfa' : '#fff7e8', border: `1px solid ${task.locked ? '#9e87d9' : '#f0b35b'}`,
+                    background: task.locked ? '#edf3fa' : '#fff7e8', border: `1px solid ${task.locked ? '#b5c5d8' : '#f0b35b'}`,
                     borderRadius: 6, padding: 6, boxSizing: 'border-box', overflow: 'auto', zIndex: 1,
                   }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 4 }}>
-                      <Typography.Text strong style={{ fontSize: 12 }}>{task.name}</Typography.Text>
+                      <Typography.Text strong style={{ fontSize: 14 }}>{task.name}</Typography.Text>
                       <Tag color={task.locked ? 'green' : 'orange'} style={{ marginInlineEnd: 0 }}>{task.locked ? '已审核' : '待审核'}</Tag>
                     </div>
-                    <div style={{ fontSize: 10, color: '#64748d', marginTop: 2 }}>W{task.start_week}—W{task.end_week} · 需{task.teacher_count}名教师</div>
-                    <Tooltip title={names}><div style={{ fontSize: 10, marginTop: 3 }}>申报 {task.applicant_count ?? task.applicants?.length ?? 0} 人：{names}</div></Tooltip>
-                    <div style={{ fontSize: 10, marginTop: 2 }}>当前：{assigned}</div>
-                    <Button size="small" type="link" icon={<EditOutlined />} disabled={!canAssign || !(task.applicants?.length)} onClick={() => open(task)} style={{ padding: 0, height: 22, fontSize: 11 }}>
+                    <div style={{ fontSize: 12, color: '#64748d', marginTop: 2 }}>W{task.start_week}—W{task.end_week} · 需{task.teacher_count}名教师</div>
+                    <Tooltip title={names}><div style={{ fontSize: 12, marginTop: 3 }}>申报 {task.applicant_count ?? task.applicants?.length ?? 0} 人：{names}</div></Tooltip>
+                    <div style={{ fontSize: 12, marginTop: 2 }}>当前：{assigned}</div><div style={{fontSize:12}}>{task.room_name||'未分配'}</div>
+                    <Button size="small" type="link" icon={<EditOutlined />} disabled={!canAssign || !(task.applicants?.length)} onClick={() => open(task)} style={{ padding: 0, height: 22, fontSize: 12 }}>
                       人工调剂
                     </Button>
                   </div>;

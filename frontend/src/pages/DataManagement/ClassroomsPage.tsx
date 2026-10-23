@@ -1,14 +1,28 @@
 // 教室管理页面
-import { Form, Input, InputNumber, Select, Switch } from 'antd';
+import { useState } from 'react';
+import { Button, Form, Input, InputNumber, Select, Switch, message } from 'antd';
+import { DownloadOutlined } from '@ant-design/icons';
 import DataTable from '../../components/DataTable';
+import { ImportButton } from '../../components/DataImport';
 import { classroomApi } from '../../api/client';
+import { downloadDataset } from '../../lib/download';
 
 export default function ClassroomsPage() {
+  const [tableKey, setTableKey] = useState(0);
+  const downloadClassrooms = async () => {
+    try { await downloadDataset('classrooms'); message.success('下载已开始'); }
+    catch (e) { message.error(e instanceof Error ? e.message : '下载失败'); }
+  };
   return (
     <DataTable
+      key={tableKey}
       title="教室管理"
       entityType="classrooms"
       api={classroomApi}
+      extraToolbar={<>
+        <Button icon={<DownloadOutlined/>} onClick={() => void downloadClassrooms()}>下载</Button>
+        <ImportButton entityType="classrooms" onImported={() => setTableKey(k => k + 1)} />
+      </>}
       columns={[
         { title: 'ID', dataIndex: 'id', width: 60 },
         { title: '教室名称', dataIndex: 'name', width: 130 },

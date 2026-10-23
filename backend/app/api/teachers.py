@@ -10,6 +10,7 @@ from app.models.course import Course
 from app.models.class_info import ClassInfo
 from app.models.planning import TeacherProfile
 from app.services.course_library import professional_courses
+from app.services.schedule_versions import resolve_schedule_version
 from app.schemas.teacher import TeacherCreate, TeacherUpdate, TeacherResponse
 
 router = APIRouter(prefix="/api/teachers", tags=["教师管理"])
@@ -40,10 +41,12 @@ def get_teacher_courses(teacher_id: int, version: str = Query(None), db: Session
     if not teacher:
         raise HTTPException(status_code=404, detail="教师不存在")
 
-    query = db.query(ScheduleEntry).filter(ScheduleEntry.teacher_id == teacher_id)
-    if version:
-        query = query.filter(ScheduleEntry.schedule_version == version)
-    entries = query.all()
+    # 未指定版本时固定到最新版本，避免多个版本的排课条目相互叠加。
+    version = resolve_schedule_version(db, version)
+    entries = [] if not version else db.query(ScheduleEntry).filter(
+        ScheduleEntry.teacher_id == teacher_id,
+        ScheduleEntry.schedule_version == version,
+    ).all()
 
     if not entries:
         return {
@@ -117,6 +120,9 @@ def get_teacher_course_affiliations(teacher_id: int, db: Session = Depends(get_d
     return {'teacher_id': teacher.id, 'teacher_name': teacher.name,
             'profile_updated': bool(own), 'course_groups': course_groups,
             'leader_courses': leader_courses}
+
+
+@router.get("/{teacher_id}", response_model=TeacherResponse, summary="获取教师详情")
 def get_teacher(teacher_id: int, db: Session = Depends(get_db)):
     teacher = db.query(Teacher).filter(Teacher.id == teacher_id).first()
     if not teacher:
@@ -133,6 +139,8 @@ def create_teacher(data: TeacherCreate, db: Session = Depends(get_db)):
     ).first()
     if existing:
         raise HTTPException(status_code=400, detail="教师工号或邮箱已存在")
+    from app.services.teacher_positions import validate_position
+    validate_position(data.position, data.review_major)
     teacher = Teacher(**data.model_dump())
     db.add(teacher)
     db.commit()
@@ -146,6 +154,9 @@ def update_teacher(teacher_id: int, data: TeacherUpdate, db: Session = Depends(g
     if not teacher:
         raise HTTPException(status_code=404, detail="教师不存在")
     update_data = data.model_dump(exclude_unset=True)
+    from app.services.teacher_positions import validate_position
+    validate_position(update_data.get('position', teacher.position),
+                      update_data.get('review_major', teacher.review_major))
     for key, value in update_data.items():
         setattr(teacher, key, value)
     db.commit()
