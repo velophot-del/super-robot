@@ -5,10 +5,12 @@ import { Form, Input, InputNumber, Select, Switch, Space, Button, Alert, Modal, 
 import { useNavigate } from 'react-router-dom';
 import DataTable from '../../components/DataTable';
 import { courseApi, teacherApi } from '../../api/client';
-import { filterCourses, courseFilterOptions, loadAllCourses, GRADE_TABS, inGrade } from '../../lib/courseFilters';
-import type { CourseFilters, GradeKey } from '../../lib/courseFilters';
+import { filterCourses, courseFilterOptions, loadAllCourses, currentGradeCohorts, courseCohorts, inGrade } from '../../lib/courseFilters';
+import type { CourseFilters } from '../../lib/courseFilters';
 import { gradeLabel } from '../../lib/adminStageGrid';
 import { planningApi } from '../../api/planning';
+
+const GRADE_COHORTS = currentGradeCohorts();
 
 export default function CoursesPage() {
   const navigate=useNavigate();
@@ -25,7 +27,7 @@ export default function CoursesPage() {
   useEffect(()=>{void loadTeachers();},[loadTeachers]);
   useEffect(()=>{void planningApi.offeringUnits().then(setUnits).catch(()=>setUnits([]));},[]);
   const [filters, setFilters] = useState<CourseFilters>({});
-  const [gradeTab,setGradeTab]=useState<GradeKey>('freshman');
+  const [gradeTab,setGradeTab]=useState<string>(GRADE_COHORTS[0]);
   const [includeInactive,setIncludeInactive]=useState(false);
   const [includePublic,setIncludePublic]=useState(false);
   const [catalog, setCatalog] = useState<any[]>([]);
@@ -41,7 +43,7 @@ export default function CoursesPage() {
     return params?.search ? rows.filter(r => r.name.includes(params.search)) : rows;
   }}), [includeInactive,includePublic]);
   const filterData = useCallback((rows: any[]) =>
-    filterCourses(rows, filters).filter(row => inGrade(row.semester, gradeTab)), [filters, gradeTab]);
+    filterCourses(rows, filters).filter(row => inGrade(row, gradeTab)), [filters, gradeTab]);
   const refresh=()=>setTableKey(value=>value+1);
   const bulkUpdate=async()=>{
     const raw=bulkForm.getFieldsValue();
@@ -62,9 +64,12 @@ export default function CoursesPage() {
   return (<>
     {teacherError&&<Alert type="error" showIcon title={`课程负责人教师名单加载失败：${teacherError}`} action={<Button onClick={()=>void loadTeachers()}>重试</Button>} style={{marginBottom:16}}/>}
     <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,marginBottom:12}}>
-      <Tabs type="card" activeKey={gradeTab} onChange={key => setGradeTab(key as GradeKey)}
-        items={GRADE_TABS.map(tab => ({key: tab.key, label: tab.label}))} style={{marginBottom:0}}/>
-      <span style={{color:'#8c8c8c',fontSize:12}}>按培养方案学期：大一 1–2 · 大二 3–4 · 大三 5–6 · 大四 7–8</span>
+      <div style={{display:'flex',alignItems:'center',gap:12}}>
+        <span style={{fontWeight:600}}>年级</span>
+        <Tabs type="card" activeKey={gradeTab} onChange={setGradeTab}
+          items={GRADE_COHORTS.map(cohort => ({key: cohort, label: `${cohort}级`}))} style={{marginBottom:0}}/>
+      </div>
+      <span style={{color:'#8c8c8c',fontSize:12}}>每个页签展示该届学生培养方案中的全部课程（含 4 年学期）</span>
     </div>
     <Space wrap style={{marginBottom:16}}>
       {([['course_type','课程类型'],['category','课程性质'],['department','专业']] as const).map(([key,label]) =>
@@ -95,7 +100,10 @@ export default function CoursesPage() {
         { title: '课程类型', dataIndex: 'course_type', width: 120 },
         { title: '上课学期', dataIndex: 'semester', width: 100, render: (v:number|null|undefined) => v?`第${v}学期`:'待补录' },
         { title: '课程性质', dataIndex: 'course_nature', width: 90 },
-        { title: '年级', dataIndex: 'cohort', width: 90, render: (v:string|null) => v?gradeLabel(v):'不限' },
+        { title: '年级', dataIndex: 'cohort', width: 90, render: (_:unknown, r:any) => {
+            const cohorts = courseCohorts(r);
+            return cohorts.length ? cohorts.map(gradeLabel).join('、') : '不限';
+        } },
         { title: '授课周数', dataIndex: 'teaching_weeks', width: 85, render: (v:number|null) => v??'按学期次数' },
         { title: '总课时', dataIndex: 'total_hours', width: 70, render: (v: number|null) => v ?? '-' },
         { title: '学分', dataIndex: 'credits', width: 60 },
