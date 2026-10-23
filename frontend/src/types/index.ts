@@ -64,6 +64,8 @@ export interface Course {
   name: string;
   course_code: string;
   course_type: string;
+  course_nature: string;
+  semester?: number | null;
   semester_sessions: number;
   weekly_sessions: number;
   hours_per_session: number;

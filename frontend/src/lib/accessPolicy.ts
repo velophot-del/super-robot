@@ -1,7 +1,7 @@
 import type { UserInfo } from '../types';
 
 export function can(user: UserInfo | null | undefined, action: string): boolean {
-  return Boolean(user?.grants?.some(g => g.capability === action));
+  return Boolean(user?.grants?.some(g => g.capability === action || (action === 'review' && g.capability === 'lead')));
 }
 
 // 旧接口兼容函数仅供已存在的回归测试；实际业务入口使用can职能判断。

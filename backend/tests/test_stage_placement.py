@@ -1,7 +1,9 @@
 import unittest
 import test_debug_mode
 from datetime import date,datetime
-from app.models.planning import AcademicPlan,CurriculumDocument,ActiveCurriculum
+from app.models.planning import AcademicPlan
+from app.models.class_info import ClassInfo
+from app.models.course import Course
 
 
 class StagePlacementTests(unittest.IsolatedAsyncioTestCase):
@@ -10,11 +12,10 @@ class StagePlacementTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_drop_persists_span_moves_and_rejects_exam_overflow_or_stale(self):
         h={'Authorization':'Bearer '+(await self.client.post('/api/debug/session',json={'role':'admin'})).json()['access_token']}
-        row={'code':'A','name':'Typography','credits':4,'required_hours':72,'semester':1,'category':'专业必修课','direction':'Design','tags':['type'],'teaching_weeks':5,'weekly_hours':16,'tail_hours':8,'notes':'最后一周8课时','schedulable':True}
-        self.db.add(CurriculumDocument(id=1,name='scheme',major='Design',cohort='2026',revision=1,original=b'test',sha256='hash',rows=[row]));self.db.flush()
-        self.db.add(ActiveCurriculum(major='Design',cohort='2026',document_id=1))
+        self.db.add_all([ClassInfo(name=name,grade='2026',department='Design',student_count=30) for name in ('A','B')])
+        self.db.add(Course(name='Typography',course_code='A',credits=4,total_hours=72,semester=1,cohort='2026',
+            department='Design',teaching_weeks=5,tail_hours=8))
         self.db.add(AcademicPlan(id=1,name='Term',start_date=date(2027,9,6),weeks=20,deadline=datetime(2027,8,1),state='draft',revision=1,settings={'major':'Design','cohort':'2026','semester':1,'groups':['A','B']}));self.db.commit()
-        r=await self.client.post('/api/planning/curricula/1/sync-courses',headers=h);self.assertEqual(r.status_code,200,r.text)
         r=await self.client.get('/api/planning/plans/1/course-pool',headers=h);self.assertEqual(r.status_code,200,r.text);course=r.json()['courses'][0]
         data={'revision':1,'course_id':course['id'],'group':'A','start_week':2}
         r=await self.client.put('/api/planning/plans/1/placement',headers=h,json=data);self.assertEqual(r.status_code,200,r.text)

@@ -185,3 +185,21 @@ class WorkloadEstimateInput(BaseModel):
     weeks: int | None = Field(None, ge=0, le=20)
     guidance_students: int | None = Field(None, ge=0, le=10000)
     guidance_kind: Literal['design','thesis'] | None = None
+
+
+class ScheduleConfirmationInput(BaseModel):
+    snapshot_id: int = Field(ge=1)
+    task_id: int = Field(ge=1)
+    note: str = Field('',max_length=500)
+
+
+class ScheduleChangeRequestInput(BaseModel):
+    snapshot_id: int = Field(ge=1)
+    task_id: int = Field(ge=1)
+    reason: str = Field(min_length=5,max_length=1000)
+    desired_change: str = Field('',max_length=1000)
+
+
+class ScheduleChangeDecisionInput(BaseModel):
+    approve: bool
+    reason: str = Field('',max_length=1000)

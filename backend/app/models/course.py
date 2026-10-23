@@ -11,7 +11,12 @@ class Course(Base, TimestampMixin):
     id = Column(Integer, primary_key=True, autoincrement=True, comment="课程ID")
     name = Column(String(200), nullable=False, comment="课程名称")
     course_code = Column(String(50), unique=True, nullable=False, comment="课程编码")
-    course_type = Column(String(30), default="必修", comment="课程类型: 必修/选修/公共课")
+    course_type = Column(String(30), default="专业课", comment="课程类型")
+    course_nature = Column(String(20), nullable=False, default="必修课", comment="课程性质: 必修课/限选课/任选课")
+    semester = Column(Integer, nullable=True, comment="上课学期（培养方案学期）")
+    cohort = Column(String(20), nullable=True, comment="适用年级；为空时按专业和上课学期匹配")
+    teaching_weeks = Column(Integer, nullable=True, comment="授课周数")
+    tail_hours = Column(Integer, nullable=True, comment="尾周学时，适用于最后一周课时不同的课程")
     semester_sessions = Column(Integer, nullable=False, default=16, comment="学期教学次数(一学期共上几次课)")
     weekly_sessions = Column(Integer, nullable=False, default=1, comment="每周上课次数(排课引擎用)")
     hours_per_session = Column(Integer, nullable=False, default=2, comment="每次课时数(1次课=几学时)")
@@ -21,8 +26,10 @@ class Course(Base, TimestampMixin):
     requires_lab = Column(Boolean, default=False, comment="是否需要实验室/机房")
     priority = Column(Integer, default=0, comment="优先级(0-10,越大越优先)")
     department = Column(String(100), nullable=True, comment="所属专业")
+    offering_unit_id = Column(Integer, ForeignKey('offering_units.id'), nullable=True, comment='开课单位')
     leader_teacher_id = Column(Integer, ForeignKey('teachers.id', ondelete='SET NULL'), nullable=True, comment='课程负责人')
     remarks = Column(Text, nullable=True, comment="备注/课程描述")
+    is_active = Column(Boolean, nullable=False, default=True, comment="是否纳入课程库与新排课周期")
 
     def __repr__(self):
         return f"<Course(id={self.id}, name='{self.name}')>"

@@ -40,7 +40,7 @@ def planning_timetable(user: User = Depends(require_user), db: Session = Depends
     """合并本人已发布快照，旧课表仅提供本人历史版本；不回退冒充当前学期。"""
     from datetime import datetime
     from zoneinfo import ZoneInfo
-    from app.models.planning import PublishedPlan
+    from app.models.planning import PublishedPlan, TeacherScheduleConfirmation, ScheduleChangeRequest, ScheduleChangeDecision, TeacherNotification
     from app.services.authorization import can
 
     teacher_id = getattr(user, 'teacher_id', None)
@@ -58,6 +58,20 @@ def planning_timetable(user: User = Depends(require_user), db: Session = Depends
         tasks = [t for t in row.payload['tasks'] if teacher_id in t.get('teacher_ids', [])]
         if not tasks:
             continue
+        for task in tasks:
+            confirmation = db.query(TeacherScheduleConfirmation).filter_by(
+                snapshot_id=row.id, task_id=task['id'], teacher_id=teacher_id,
+                status='confirmed').first()
+            request = db.query(ScheduleChangeRequest).filter_by(
+                snapshot_id=row.id, task_id=task['id'], teacher_id=teacher_id).order_by(
+                ScheduleChangeRequest.id.desc()).first()
+            decision = db.query(ScheduleChangeDecision).filter_by(
+                request_id=request.id).order_by(ScheduleChangeDecision.id.desc()).first() if request else None
+            task['confirmation_status'] = 'confirmed' if confirmation else 'pending'
+            task['change_request'] = ({'id': request.id, 'reason': request.reason,
+                'desired_change': request.desired_change,
+                'status': decision.decision if decision else 'pending',
+                'decision_reason': decision.reason if decision else None} if request else None)
         plan = dict(row.payload['plan'])
         start = datetime.fromisoformat(plan['start_date']).date()
         first = start.year if start.month >= 8 else start.year - 1
@@ -69,8 +83,11 @@ def planning_timetable(user: User = Depends(require_user), db: Session = Depends
         ScheduleEntry.teacher_id == teacher_id,
         ScheduleEntry.schedule_version.isnot(None)).distinct().order_by(
         ScheduleEntry.schedule_version.desc()).all()
+    notifications = [{'id': row.id, 'plan_id': row.plan_id, 'kind': row.kind,
+        'payload': row.payload, 'created_at': row.created_at.isoformat() if row.created_at else None}
+        for row in db.query(TeacherNotification).filter_by(teacher_id=teacher_id).order_by(TeacherNotification.id.desc()).limit(50)]
     return {'current_period': current, 'batches': batches,
-            'legacy_versions': [version for (version,) in versions]}
+            'legacy_versions': [version for (version,) in versions], 'notifications': notifications}
 
 
 @router.get('/plans/{plan_id}/export')

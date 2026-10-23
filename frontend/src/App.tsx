@@ -19,7 +19,6 @@ import DebugPage from './pages/DebugPage';
 import { can, requiresAccountSetup } from './lib/accessPolicy';
 import PlanningWorkspace, { ManagementPlanningWorkspace } from './pages/PlanningWorkspace';
 import TeacherProfilePage from './pages/TeacherProfilePage';
-import CurriculumMaterialsPage from './pages/CurriculumMaterialsPage';
 
 function ManagementRoute() {
   const { user } = useAuth();
@@ -89,7 +88,6 @@ export default function App() {
                 <Route path="/planning/review" element={<ReviewWorkspaceRoute />} />
                 <Route path="/profile" element={<TeacherProfilePage />} />
                 <Route element={<ManagementRoute />}>
-                <Route path="/materials" element={<CurriculumMaterialsPage />} />
                 <Route path="/data/classes" element={<ClassesPage />} />
                 <Route path="/data/teachers" element={<TeachersPage />} />
                 <Route path="/data/courses" element={<CoursesPage />} />

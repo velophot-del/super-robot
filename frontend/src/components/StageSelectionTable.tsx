@@ -1,34 +1,39 @@
-import { Button, Checkbox, Empty, Tag, Typography } from 'antd';
-import { selectionSegments,weekDates,selectionSlots } from '../lib/selectionGrid';
+import { Button, Checkbox, Empty } from 'antd';
+import { weekDates } from '../lib/selectionGrid';
 import { examWeeksFor } from '../lib/examWeeks';
+import { gradeLabel, stageClassScope, stageLanes, stageRoomLabel, stageRowMetrics } from '../lib/adminStageGrid';
 
 export default function StageSelectionTable({plan,tasks,selected,onTask,onToggle,disabled,readOnly=false}:{plan:any;tasks:any[];selected:number[];onTask:(task:any,week:number)=>void;onToggle:(task:any)=>void;disabled:boolean;readOnly?:boolean}){
-  const groups=[...new Set(tasks.map(t=>t.group))].sort();
+  const groups:string[]=plan.groups?.length?plan.groups:[...new Set<string>(tasks.map(t=>t.group))];
   const weeks=Array.from({length:plan.weeks},(_,i)=>i+1);
-  if(!groups.length)return <Empty description="该周期暂无课程任务"/>;
-  return <div style={{overflowX:'auto',border:'1px solid #d9d9e3',borderRadius:8}}>
-    <table aria-label={`${plan.major||'专业课程'}阶段${readOnly?'课表':'选课表'}`} style={{borderCollapse:'collapse',tableLayout:'fixed',width:'100%',minWidth:240+plan.weeks*66}}>
-      <colgroup><col style={{width:100}}/><col style={{width:140}}/>{weeks.map(w=><col key={w}/>)}</colgroup>
-      <thead>
-        <tr style={{background:'#f2f0fb'}}><th rowSpan={2} style={{border:'1px solid #d9d9e3',padding:8}}>专业 / 年级</th><th rowSpan={2} style={{border:'1px solid #d9d9e3',padding:8}}>教学组 / 班级</th>{weeks.map(w=><th key={w} style={{border:'1px solid #d9d9e3',padding:'8px 2px',fontSize:12}}>第{w}周</th>)}</tr>
-        <tr style={{background:'#faf9fe'}}>{weeks.map(w=><th key={w} style={{border:'1px solid #d9d9e3',padding:'6px 2px',fontSize:11,fontWeight:400}}>{weekDates(plan.start_date,w)}</th>)}</tr>
-      </thead>
-      <tbody>{groups.map((group,index)=><tr key={group}>
-        {index===0&&<th rowSpan={groups.length} style={{border:'1px solid #d9d9e3',padding:10,background:'#faf9fe'}}><div>{plan.global_cycle?'全学院':plan.major||'未注明专业'}</div><Typography.Text type="secondary">{plan.global_cycle?'所有年级与专业':plan.cohort?`${plan.cohort}级`:''}</Typography.Text></th>}
-        <th style={{border:'1px solid #d9d9e3',padding:10,background:'white',position:'sticky',left:0,zIndex:1}}>{group}</th>
-        {selectionSegments(tasks.filter(t=>t.group===group),plan.weeks,{ignoreTail:!readOnly,examWeeks:examWeeksFor(plan,tasks.find(t=>t.group===group)?.cohort,group,plan.weeks)}).map(segment=><td key={segment.start} colSpan={segment.span} style={{verticalAlign:'top',border:'1px solid #d9d9e3',padding:5,background:segment.exam?'#f5f5f5':'white',height:110}}>
-          {segment.tasks.length?segment.tasks.map(task=><div key={task.id} style={{border:`1px solid ${selected.includes(task.id)?'#7654ec':'#e7e3f0'}`,borderRadius:6,padding:6,marginBottom:5,background:selected.includes(task.id)?'#f3efff':'white'}}>
-            <Button type="text" block aria-label={`查看课程 ${task.name} ${task.group}`} onClick={()=>onTask(task,segment.start)}
-              style={{display:'block',height:'auto',minHeight:68,whiteSpace:'normal',textAlign:'left',padding:3,overflowWrap:'anywhere'}}>
-              <div style={{fontWeight:600}}>{task.name}{selected.includes(task.id)?' ✓':''}</div>
-              <div style={{fontSize:11,opacity:0.85}}>{selectionSlots(task,segment.start)||'时段待统一安排'}</div>
-              <div style={{fontSize:11,opacity:0.85}}>{task.credits}学分 · {task.required_hours}学时</div>
-              <div style={{fontSize:11,opacity:0.85}}>{task.teacher_names?.length?task.teacher_names.join('、'):'教师待分配'}</div>
-            </Button>
-            {!readOnly&&<Checkbox aria-label={`预选 ${plan.id} ${task.name} ${task.group}`} checked={selected.includes(task.id)} disabled={disabled} onChange={()=>onToggle(task)}>预选</Checkbox>}
-          </div>):segment.exam?<Tag>考试</Tag>:null}
-        </td>)}
-      </tr>)}</tbody>
+  if(!groups.length)return <Empty description="该周期暂无班级"/>;
+  return <div className="stage-table-scroll">
+    <table className="college-stage-table" aria-label={`${plan.major||'学院课程'}阶段${readOnly?'课表':'选课表'}`} style={{minWidth:304+plan.weeks*64}}>
+      <colgroup><col style={{width:68}}/><col style={{width:110}}/><col style={{width:126}}/>{weeks.map(w=><col key={w}/>)}</colgroup>
+      <thead><tr><th rowSpan={2}>年级</th><th rowSpan={2}>专业</th><th rowSpan={2}>开课班级</th>{weeks.map(w=><th key={w}>第{w}周</th>)}</tr>
+        <tr>{weeks.map(w=><th key={w} className="week-date">{weekDates(plan.start_date,w)}</th>)}</tr></thead>
+      <tbody>{groups.map(group=>{
+        const groupTasks=tasks.filter(t=>t.group===group);
+        const scope=stageClassScope(group,plan.class_scopes||[],groupTasks);
+        const bars=stageLanes<any>(groupTasks.filter(t=>t.start_week&&t.end_week));
+        const {laneStep,rowHeight}=stageRowMetrics(bars);
+        const exams=examWeeksFor(plan,scope.cohort||plan.cohort,group,plan.weeks);
+        return <tr key={group}>
+          <th className="scope-cell" style={{left:0}}>{gradeLabel(scope.cohort||plan.cohort)||'—'}</th>
+          <th className="scope-cell" style={{left:68}} title={scope.major}>{scope.major||plan.major||'—'}</th>
+          <th className="scope-cell" style={{left:178}} title={group}>{group}</th>
+          <td colSpan={plan.weeks} style={{padding:0}}><div style={{position:'relative',height:rowHeight}}>
+            {weeks.map(w=><div key={w} className={`stage-week-cell${exams.has(w)?' is-exam':''}`} style={{left:`${(w-1)*100/plan.weeks}%`,width:`${100/plan.weeks}%`}}>{exams.has(w)?'考试':''}</div>)}
+            {bars.map(({task,lane})=><div key={task.id} className={`selection-course${selected.includes(task.id)?' is-selected':''}`} data-task-id={task.id} data-start-week={task.start_week} data-end-week={task.end_week}
+              style={{left:`${(task.start_week-1)*100/plan.weeks}%`,width:`${(task.end_week-task.start_week+1)*100/plan.weeks}%`,top:lane*laneStep+2}}>
+              <Button type="text" title={task.name} aria-label={`查看课程 ${task.name} ${task.group}`} onClick={()=>onTask(task,task.start_week)} className="selection-course-title">{task.name}</Button>
+              <div className="course-secondary" title={task.teacher_names?.join('、')}>{task.teacher_names?.filter(Boolean).join('、')||'教师待分配'}</div>
+              <div className="course-secondary">{stageRoomLabel(task.room_name)}</div>
+              {!readOnly&&<Checkbox aria-label={`预选 ${plan.id} ${task.name} ${task.group}`} checked={selected.includes(task.id)} disabled={disabled} onChange={()=>onToggle(task)}>预选</Checkbox>}
+            </div>)}
+          </div></td>
+        </tr>;
+      })}</tbody>
     </table>
   </div>;
 }

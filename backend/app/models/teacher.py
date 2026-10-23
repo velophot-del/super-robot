@@ -13,6 +13,8 @@ class Teacher(Base, TimestampMixin):
     teacher_code = Column(String(30), unique=True, nullable=False, comment="教师工号")
     department = Column(String(100), nullable=True, comment="所属部门/教研组")
     title = Column(String(50), nullable=True, comment="职称")
+    position = Column(String(50), nullable=True, default="教师")
+    review_major = Column(String(100), nullable=True)
     email = Column(String(100), nullable=True, comment="电子邮箱")
     phone = Column(String(30), nullable=True, comment="联系电话")
     max_weekly_hours = Column(Integer, nullable=True, default=20, comment="每周最大课时数")

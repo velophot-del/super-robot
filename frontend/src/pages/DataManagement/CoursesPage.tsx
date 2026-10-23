@@ -1,15 +1,20 @@
 // 课程管理页面（含总课时自动计算）
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import type { FormInstance } from 'antd';
-import { Form, Input, InputNumber, Select, Switch, Space, Button, Alert } from 'antd';
+import { Form, Input, InputNumber, Select, Switch, Space, Button, Alert, Modal, Popconfirm, message } from 'antd';
+import { useNavigate } from 'react-router-dom';
 import DataTable from '../../components/DataTable';
 import { courseApi, teacherApi } from '../../api/client';
 import { filterCourses, courseFilterOptions, loadAllCourses } from '../../lib/courseFilters';
 import type { CourseFilters } from '../../lib/courseFilters';
+import { gradeLabel } from '../../lib/adminStageGrid';
+import { planningApi } from '../../api/planning';
 
 export default function CoursesPage() {
+  const navigate=useNavigate();
   const [teachers,setTeachers]=useState<any[]>([]);
   const [teacherError,setTeacherError]=useState('');
+  const [units,setUnits]=useState<any[]>([]);
   const [teacherLoading,setTeacherLoading]=useState(true);
   const loadTeachers=useCallback(async()=>{
     setTeacherLoading(true);setTeacherError('');
@@ -18,28 +23,52 @@ export default function CoursesPage() {
     finally{setTeacherLoading(false);}
   },[]);
   useEffect(()=>{void loadTeachers();},[loadTeachers]);
+  useEffect(()=>{void planningApi.offeringUnits().then(setUnits).catch(()=>setUnits([]));},[]);
   const [filters, setFilters] = useState<CourseFilters>({});
+  const [includeInactive,setIncludeInactive]=useState(false);
   const [catalog, setCatalog] = useState<any[]>([]);
+  const [tableKey,setTableKey]=useState(0),[selectedRows,setSelectedRows]=useState<any[]>([]),[bulkOpen,setBulkOpen]=useState(false),[bulkBusy,setBulkBusy]=useState(false);
+  const [bulkForm]=Form.useForm();
+  const [unitForm]=Form.useForm();
+  const [unitOpen,setUnitOpen]=useState(false),[unitBusy,setUnitBusy]=useState(false);
   const options = useMemo(() => courseFilterOptions(catalog), [catalog]);
   const api = useMemo(() => ({...courseApi, list: async (params?: any) => {
     // Load every page so categories and filtering include the complete catalog.
-    const rows = await loadAllCourses(courseApi.list);
+    const rows = await loadAllCourses(params=>courseApi.list({...params,include_inactive:includeInactive}));
     setCatalog(rows);
     return params?.search ? rows.filter(r => r.name.includes(params.search)) : rows;
-  }}), []);
+  }}), [includeInactive]);
   const filterData = useCallback((rows: any[]) => filterCourses(rows, filters), [filters]);
+  const refresh=()=>setTableKey(value=>value+1);
+  const bulkUpdate=async()=>{
+    const raw=bulkForm.getFieldsValue();
+    const updates=Object.fromEntries(Object.entries(raw).filter(([,value])=>value!==undefined)
+      .map(([key,value])=>[key,value==='__clear__'?null:value]));
+    if(!Object.keys(updates).length){message.warning('请选择至少一个批量修改字段');return;}
+    setBulkBusy(true);
+    try{await courseApi.bulkUpdate(selectedRows.map(row=>row.id),updates);message.success(`已批量修改${selectedRows.length}门课程`);setBulkOpen(false);setSelectedRows([]);refresh();}
+    catch(e){message.error(e instanceof Error?e.message:'批量修改失败');}
+    finally{setBulkBusy(false);}
+  };
+  const addUnit=async()=>{
+    setUnitBusy(true);
+    try{const values=await unitForm.validateFields();await planningApi.createOfferingUnit(values);unitForm.resetFields();setUnits(await planningApi.offeringUnits());setUnitOpen(false);message.success('开课单位已新增');}
+    catch(e){if(e instanceof Error)message.error(e.message);}
+    finally{setUnitBusy(false);}
+  };
   return (<>
     {teacherError&&<Alert type="error" showIcon title={`课程负责人教师名单加载失败：${teacherError}`} action={<Button onClick={()=>void loadTeachers()}>重试</Button>} style={{marginBottom:16}}/>}
     <Space wrap style={{marginBottom:16}}>
-      {([['department','专业'],['category','课程性质'],['course_type','类型'],['cohort','入学届次']] as const).map(([key,label]) =>
+      {([['course_type','课程类型'],['category','课程性质'],['department','专业'],['cohort','年级']] as const).map(([key,label]) =>
         <Select key={key} aria-label={`按${label}筛选`} placeholder={`全部${label}`} allowClear showSearch
           style={{minWidth:160}} value={filters[key]} onChange={value => setFilters(old => ({...old,[key]:value}))}
-          options={[...options[key].map(value => ({value,label:key==='cohort'?`${value}级`:value})),{value:'__unset__',label:'未设置'}]}/>
+          options={[...options[key].map(value => ({value,label:key==='cohort'?gradeLabel(value):value})),{value:'__unset__',label:'未设置'}]}/>
       )}
       <Button onClick={() => setFilters({})}>重置筛选</Button>
     </Space>
-    <Alert type="info" showIcon style={{marginBottom:16}} title="年级按入学届次筛选；课程性质与届次取自培养方案来源，无来源的课程显示未设置。"/>
+    <Alert type="info" showIcon style={{marginBottom:16}} title="排课周期直接读取课程库；课程按适用年级、专业和上课学期匹配。导入课程请使用本页的批量导入。"/>
     <DataTable
+      key={tableKey}
       title="课程管理"
       entityType="courses"
       api={api}
@@ -48,25 +77,44 @@ export default function CoursesPage() {
         { title: 'ID', dataIndex: 'id', width: 60 },
         { title: '课程名称', dataIndex: 'name', width: 160 },
         { title: '课程编码', dataIndex: 'course_code', width: 100 },
+        { title: '状态', dataIndex: 'is_active', width: 80, render: (v:boolean) => v===false?<span style={{color:'#8c8c8c'}}>已移出</span>:'活动' },
         { title: '课程负责人', width:160, render:(_:unknown,r:any)=>r.leader_teacher_name?`${r.leader_teacher_name}（${r.leader_teacher_code}）`:'未指定' },
-        { title: '所属专业', dataIndex: 'department', width: 100, render: (v: string) => v || <span style={{color:'#ccc'}}>未设置</span> },
-        { title: '课程性质', render: (_:unknown,r:any) => [...new Set((r.curriculum_sources||[]).filter((s:any)=>(!filters.department||filters.department==='__unset__'||s.major===filters.department)&&(!filters.cohort||filters.cohort==='__unset__'||s.cohort===filters.cohort)).map((s:any)=>s.metadata?.category).filter(Boolean))].join('、')||'未设置' },
-        { title: '入学届次', render: (_:unknown,r:any) => [...new Set((r.curriculum_sources||[]).filter((s:any)=>(!filters.department||filters.department==='__unset__'||s.major===filters.department)&&(!filters.category||filters.category==='__unset__'||s.metadata?.category===filters.category)).map((s:any)=>s.cohort).filter(Boolean))].map(v=>`${v}级`).join('、')||'未设置' },
-        { title: '类型', dataIndex: 'course_type', width: 80 },
-        { title: '授课周数', width: 85, render: (_:unknown,r:any) => r.curriculum_sources?.[0]?.metadata.teaching_weeks??'待配置' },
-        
-        
+        { title: '适用专业', dataIndex: 'department', width: 100, render: (v: string) => v || <span style={{color:'#ccc'}}>通用课程</span> },
+        { title: '开课单位', dataIndex: 'offering_unit_name', width: 120, render: (v:string) => v || '未设置' },
+        { title: '课程类型', dataIndex: 'course_type', width: 120 },
+        { title: '上课学期', dataIndex: 'semester', width: 100, render: (v:number|null|undefined) => v?`第${v}学期`:'待补录' },
+        { title: '课程性质', dataIndex: 'course_nature', width: 90 },
+        { title: '年级', dataIndex: 'cohort', width: 90, render: (v:string|null) => v?gradeLabel(v):'不限' },
+        { title: '授课周数', dataIndex: 'teaching_weeks', width: 85, render: (v:number|null) => v??'按学期次数' },
         { title: '总课时', dataIndex: 'total_hours', width: 70, render: (v: number|null) => v ?? '-' },
         { title: '学分', dataIndex: 'credits', width: 60 },
         { title: '需连排', dataIndex: 'requires_consecutive', width: 70, render: (v: boolean) => v ? '是' : '否' },
         { title: '需实验室', dataIndex: 'requires_lab', width: 80, render: (v: boolean) => v ? '是' : '否' },
       ]}
-      formFields={form => <CourseFields form={form} teachers={teachers} teacherLoading={teacherLoading} teacherError={teacherError} />}
+      formFields={form => <CourseFields form={form} teachers={teachers} teacherLoading={teacherLoading} teacherError={teacherError} units={units} />}
+      extraToolbar={<><Switch checked={includeInactive} checkedChildren="含已移出" unCheckedChildren="仅活动" onChange={value=>{setIncludeInactive(value);refresh();}}/><Button onClick={()=>navigate('/data/import?entity=courses')}>批量导入</Button><Button onClick={()=>setUnitOpen(true)}>开课单位</Button></>}
+      extraRowActions={record=>record.is_active===false?<Button type="link" size="small" onClick={async()=>{try{await courseApi.update(record.id,{is_active:true});message.success('课程已恢复到活动课程库');refresh();}catch(e){message.error(e instanceof Error?e.message:'恢复失败');}}}>恢复</Button>:null}
+      bulkActions={(rows,clearSelection)=><Space wrap><span>已选 {rows.length} 门</span><Button onClick={()=>{setSelectedRows(rows);bulkForm.resetFields();setBulkOpen(true);}}>批量修改</Button><Popconfirm title={`将${rows.length}门课程移出活动课程库？历史课表保留，可在课程表中恢复。`} onConfirm={async()=>{setBulkBusy(true);try{await courseApi.bulkRemove(rows.map(row=>row.id));message.success(`已移出${rows.length}门课程`);clearSelection();setSelectedRows([]);refresh();}catch(e){message.error(e instanceof Error?e.message:'批量移出失败');}finally{setBulkBusy(false);}}} okText="移出课程库" cancelText="取消"><Button danger loading={bulkBusy}>批量移出</Button></Popconfirm></Space>}
     />
+    <Modal title={`批量修改 ${selectedRows.length} 门课程`} open={bulkOpen} onCancel={()=>setBulkOpen(false)} onOk={()=>void bulkUpdate()} confirmLoading={bulkBusy} okText="应用修改" destroyOnClose>
+      <Form form={bulkForm} layout="vertical">
+        <Form.Item name="course_type" label="课程类型"><Select allowClear placeholder="不修改" options={['专业课','学科通识课','德育通识课','综合实践课','跨专业交叉课','国际课程'].map(value=>({value,label:value}))}/></Form.Item>
+        <Form.Item name="course_nature" label="课程性质"><Select allowClear placeholder="不修改" options={['必修课','限选课','任选课'].map(value=>({value,label:value}))}/></Form.Item>
+        <Form.Item name="semester" label="上课学期"><Select allowClear placeholder="不修改" options={Array.from({length:12},(_,i)=>({value:i+1,label:`第${i+1}学期`}))}/></Form.Item>
+        <Form.Item name="cohort" label="适用年级"><Select allowClear showSearch placeholder="不修改" options={[{value:'__clear__',label:'不限年级'},...options.cohort.map(value=>({value,label:gradeLabel(value)}))]}/></Form.Item>
+        <Form.Item name="department" label="适用专业"><Select allowClear showSearch placeholder="不修改" options={[{value:'__clear__',label:'通用课程'},...options.department.map(value=>({value,label:value}))]}/></Form.Item>
+        <Form.Item name="offering_unit_id" label="开课单位"><Select allowClear showSearch placeholder="不修改" options={[{value:'__clear__',label:'清空开课单位'},...units.map(unit=>({value:unit.id,label:unit.name}))]}/></Form.Item>
+        <Form.Item name="teaching_weeks" label="授课周数"><InputNumber min={1} max={20} style={{width:'100%'}} placeholder="不修改"/></Form.Item>
+        <Form.Item name="is_active" label="课程状态"><Select allowClear placeholder="不修改" options={[{value:true,label:'纳入课程库'},{value:false,label:'停用'}]}/></Form.Item>
+      </Form>
+    </Modal>
+    <Modal title="新增开课单位" open={unitOpen} onCancel={()=>setUnitOpen(false)} onOk={()=>void addUnit()} confirmLoading={unitBusy} destroyOnClose>
+      <Form form={unitForm} layout="vertical"><Form.Item name="code" label="单位编码" rules={[{required:true}]}><Input/></Form.Item><Form.Item name="name" label="开课单位名称" rules={[{required:true}]}><Input/></Form.Item></Form>
+    </Modal>
   </>);
 }
 
-function CourseFields({ form,teachers,teacherLoading,teacherError }: { form: FormInstance;teachers:any[];teacherLoading:boolean;teacherError:string }) {
+function CourseFields({ form,teachers,teacherLoading,teacherError,units }: { form: FormInstance;teachers:any[];teacherLoading:boolean;teacherError:string;units:any[] }) {
         // 监听学期教学次数和每次课时变化，自动计算总课时
         const semesterSessions = Form.useWatch('semester_sessions', form);
         const hoursPerSession = Form.useWatch('hours_per_session', form);
@@ -89,9 +137,20 @@ function CourseFields({ form,teachers,teacherLoading,teacherError }: { form: For
             <Form.Item name="leader_teacher_id" label="课程负责人" getValueFromEvent={value=>value??null} extra="由管理员指定一位教师，可留空或清除；此项不会自动分配授课任务。">
               <Select aria-label="课程负责人" allowClear showSearch optionFilterProp="label" loading={teacherLoading} disabled={teacherLoading||Boolean(teacherError)} placeholder="选择一位课程负责人" options={teachers.map(t=>({value:t.id,label:`${t.name}（${t.teacher_code}）`}))}/>
             </Form.Item>
-            <Form.Item name="course_type" label="课程类型">
-              <Select options={['必修','选修','公共课','实践课'].map(t => ({ label: t, value: t }))} />
+            <Form.Item name="offering_unit_id" label="开课单位">
+              <Select allowClear placeholder="选择承担教学的单位" options={units.map(u=>({value:u.id,label:u.name}))}/>
             </Form.Item>
+            <Form.Item name="course_type" label="课程类型" rules={[{required:true}]}>
+              <Select options={['专业课','学科通识课','德育通识课','综合实践课','跨专业交叉课','国际课程'].map(t => ({ label: t, value: t }))} />
+            </Form.Item>
+            <Form.Item name="course_nature" label="课程性质" rules={[{required:true}]}>
+              <Select options={['必修课','限选课','任选课'].map(t => ({ label: t, value: t }))} />
+            </Form.Item>
+            <Form.Item name="semester" label="上课学期" rules={[{required:true,message:'请选择上课学期'}]}>
+              <Select placeholder="选择课程上课学期" options={Array.from({length:12},(_,i)=>({value:i+1,label:`第${i+1}学期`}))} />
+            </Form.Item>
+            <Form.Item name="cohort" label="适用年级"><Input placeholder="如：2026；留空表示适用于所有匹配年级"/></Form.Item>
+            <Form.Item name="teaching_weeks" label="授课周数"><InputNumber min={1} max={20} style={{width:'100%'}} placeholder="留空按学期教学次数"/></Form.Item>
             <Form.Item name="semester_sessions" label="学期教学次数" rules={[{ required: true }]} help="一学期总共上几次课">
               <InputNumber min={1} max={40} style={{ width: '100%' }} />
             </Form.Item>

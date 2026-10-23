@@ -1,28 +1,30 @@
 """教师先申报的阶段式计划工作流。所有决定来自事务内最新版本。"""
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from copy import deepcopy
+from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.teacher import Teacher
 from app.models.classroom import Classroom
-from app.models.class_info import ClassInfo
 from app.models.planning import (AcademicPlan, TeachingTask, PeriodSlot, TeacherProfile,
-    PreferenceDraft, PreferenceSubmission, MatchRun, TeachingAssignment, PlanningEvent, PublishedPlan, TeacherWorkloadEstimate)
-from app.schemas.planning import PlanInput, TaskInput, TaskLimitsInput, RoomInput, ActualStudentsInput, ExamWeeksInput, MatchWeightsInput, ProfileInput, DraftInput, SubmitInput, AssignmentInput, ManualAssignmentInput, SelfProfileInput, WorkloadEstimateInput
+    PreferenceDraft, PreferenceSubmission, MatchRun, TeachingAssignment, PlanningEvent, PublishedPlan, TeacherWorkloadEstimate,
+    TeacherScheduleConfirmation,ScheduleChangeRequest,ScheduleChangeDecision,TeacherNotification)
+from app.schemas.planning import PlanInput, TaskInput, TaskLimitsInput, RoomInput, ActualStudentsInput, ExamWeeksInput, MatchWeightsInput, ProfileInput, DraftInput, SubmitInput, AssignmentInput, ManualAssignmentInput, SelfProfileInput, WorkloadEstimateInput, ScheduleConfirmationInput, ScheduleChangeRequestInput, ScheduleChangeDecisionInput
 from app.services.auth import require_user
 from app.services.authorization import can, check
 from app.services.stage_planning import task_dict, validate_tasks, validate_student_limit, capacity
-from app.services.academic_scope import is_global, plan_term, program_semester
+from app.services.academic_scope import is_global, plan_term, program_semester, groups_for_cycle, groups_in_cycle
 from app.services.exam_weeks import normalize_exam_weeks, exam_weeks_from_config
 from app.services.matching_weights import get_match_weights, weight_items, weights_total
 from app.services.workload import compute_teacher_workload
 from app.services.teacher_course_matching import score_candidate
 from app.services.personal_profile import require_personal_profile,missing_profile_fields,effective_profile
+from app.services.course_catalog import course_catalog_scope
 
 router = APIRouter(prefix='/api/planning', tags=['教师选课与阶段计划'])
 
@@ -53,7 +55,13 @@ def get_plan(db, plan_id):
 
 def tasks_for(db, plan):
     rows = db.query(TeachingTask).filter_by(plan_id=plan.id).order_by(TeachingTask.id).all()
-    return [task_dict(db, task) for task in rows]
+    tasks = [task_dict(db, task) for task in rows]
+    if plan.state != 'published' and is_global(plan):
+        eligible = set(groups_for_cycle(db, plan.start_date, plan_term(plan)))
+        from app.models.class_info import ClassInfo
+        known = {row.name for row in db.query(ClassInfo)}
+        tasks = [task for task in tasks if task.get('group') in eligible or task.get('group') not in known]
+    return tasks
 
 
 def latest_submissions(db, plan_id):
@@ -71,7 +79,7 @@ def teacher_access(user):
 
 
 def can_read(user):
-    return any(g['capability'] in {'admin', 'review', 'publish', 'teaching'} for g in getattr(user,'grants',[]))
+    return any(g['capability'] in {'admin', 'review', 'publish', 'teaching', 'lead'} for g in getattr(user,'grants',[]))
 
 
 def plan_info(plan):
@@ -93,7 +101,8 @@ def assigned_tasks(db, plan, teacher_id, exclude=None):
         if assignment.task_id == exclude or teacher_id not in assignment.teacher_ids: continue
         task = db.get(TeachingTask, assignment.task_id); other = db.get(AcademicPlan, task.plan_id)
         from datetime import timedelta
-        if other.id == plan.id or (other.state == 'published' and other.start_date < plan.start_date+timedelta(weeks=plan.weeks)
+        supersedes = (plan.settings or {}).get('supersedes_plan_id')
+        if other.id == plan.id or (other.id != supersedes and other.state == 'published' and other.start_date < plan.start_date+timedelta(weeks=plan.weeks)
                 and other.start_date+timedelta(weeks=other.weeks) > plan.start_date): chosen.append((task_dict(db,task),other))
     return chosen
 
@@ -114,10 +123,9 @@ def create_plan(data: PlanInput, user=Depends(require_user), db: Session=Depends
         global_cycle=data.global_cycle or (not data.major and not data.cohort)
         settings={'opening_date':data.opening_date.isoformat() if data.opening_date else None,'groups':data.groups}
         if global_cycle:
-            # 全学院周期默认纳入所有班级；管理员仍可在课表编排页增删教学组。
+            # 仅纳入标准八学期学制内的有效班级。
             settings.update({'global': True, 'term': data.term})
-            if not settings['groups']:
-                settings['groups']=[row.name for row in db.query(ClassInfo).order_by(ClassInfo.id)]
+            settings['groups']=groups_for_cycle(db,data.start_date,data.term)
         else:
             settings.update(major=data.major,cohort=data.cohort,semester=data.semester)
         plan=AcademicPlan(name=data.name,start_date=data.start_date,weeks=data.weeks,
@@ -127,16 +135,97 @@ def create_plan(data: PlanInput, user=Depends(require_user), db: Session=Depends
         return plan_info(plan)
 
 
+@router.post('/plans/{plan_id}/generate')
+def generate_tasks_from_course_catalog(plan_id: int, user=Depends(require_user), db: Session=Depends(get_db)):
+    """从课程管理的活动课程库按班级专业、年级和周期学期生成教学任务。"""
+    check(user, 'admin')
+    with write(db):
+        plan = get_plan(db, plan_id)
+        if plan.state != 'draft':
+            raise HTTPException(409, '非草稿计划不能重新生成')
+        settings = plan.settings or {}
+        if is_global(plan):
+            scope = course_catalog_scope(db, plan.start_date, plan_term(plan), settings.get('groups') or None)
+        else:
+            scope = course_catalog_scope(db, plan.start_date, plan_term(plan), settings.get('groups') or None,
+                settings.get('major'), settings.get('cohort'), settings.get('semester'))
+        if not scope:
+            raise HTTPException(409, '课程库中没有匹配本周期有效班级、专业、年级和上课学期的活动课程')
+
+        existing = tasks_for(db, plan)
+        keys = {(task['code'], task['group']) for task in existing}
+        added = 0
+        for item in scope:
+            cls = item['class']
+            semester = item['semester']
+            for course in item['courses']:
+                key = (course.course_code, cls.name)
+                if key in keys:
+                    continue
+                payload = {
+                    'name': course.name,
+                    'code': course.course_code,
+                    'credits': course.credits,
+                    'required_hours': course.total_hours or course.semester_sessions * course.hours_per_session,
+                    'direction': '',
+                    'tags': [],
+                    'group': cls.name,
+                    'class_name': cls.name,
+                    'student_ids': [],
+                    'major': cls.department or course.department or '',
+                    'department': cls.department or course.department or '',
+                    'cohort': cls.grade,
+                    'program_semester': semester,
+                    'start_week': None,
+                    'end_week': None,
+                    'tail_weeks': 0,
+                    'teacher_count': 1,
+                    'mode': 'single',
+                    'student_count': 0,
+                    'room_id': None,
+                    'room_type': '',
+                    'profile_verified': False,
+                    'source': {
+                        'course_id': course.id,
+                        'major': course.department or cls.department or '',
+                        'cohort': cls.grade,
+                        'course_metadata': {
+                            'course_type': course.course_type,
+                            'course_nature': course.course_nature,
+                            'semester': course.semester,
+                            'teaching_weeks': course.teaching_weeks or course.semester_sessions,
+                            'weekly_hours': course.weekly_sessions * course.hours_per_session,
+                        },
+                    },
+                }
+                db.add(TeachingTask(plan_id=plan.id, payload=payload))
+                keys.add(key)
+                added += 1
+        if added:
+            plan.revision += 1
+        db.flush()
+        event(db, user, 'generate_tasks_from_course_catalog', {'classes': len(scope), 'added': added}, plan.id)
+        return {'task_count': len(existing) + added, 'added': added, 'needs_schedule': True,
+                'classes': len(scope), 'source': 'course_catalog'}
+
+
 @router.get('/plans/{plan_id}')
-def get_state(plan_id: int, user=Depends(require_user), db: Session=Depends(get_db)):
+def get_state(plan_id: int, user=Depends(require_user), db: Session=Depends(get_db), review_only: bool = Query(False)):
     plan=get_plan(db,plan_id)
     if not can_read(user) or (plan.state=='draft' and not can(user,'admin')): raise HTTPException(403,'计划尚未开放')
-    all_tasks=tasks_for(db,plan)
+    if review_only and not can(user,'admin') and not any(g['capability'] in {'review','lead'} for g in getattr(user,'grants',[])):
+        raise HTTPException(403,'账号没有审核职能')
+    snapshot=db.query(PublishedPlan).filter_by(plan_id=plan.id).order_by(PublishedPlan.id.desc()).first() if plan.state=='published' else None
+    all_tasks=deepcopy(snapshot.payload['tasks']) if snapshot else tasks_for(db,plan)
     if not can(user,'admin'):all_tasks=[t for t in all_tasks if t.get('start_week') and t.get('end_week')]
-    tasks=[t for t in all_tasks if can(user,'admin') or can(user,'publish') or
-           can(user,'teaching',{'teacher_id':getattr(user,'teacher_id',None)}) or can(user,'review',t)]
+    if review_only:
+        tasks=[t for t in all_tasks if can(user,'admin') or can(user,'review',t)]
+    else:
+        tasks=[t for t in all_tasks if can(user,'admin') or can(user,'publish') or
+               can(user,'teaching',{'teacher_id':getattr(user,'teacher_id',None)}) or can(user,'review',t)]
     names={t.id:t.name for t in db.query(Teacher)}
-    for task in tasks: task['teacher_names']=[names.get(t,'') for t in task['teacher_ids']]
+    for task in tasks:
+        if not snapshot:task['teacher_names']=[names.get(t,'') for t in task['teacher_ids']]
     teacher_id=getattr(user,'teacher_id',None)
     draft=db.query(PreferenceDraft).filter_by(plan_id=plan.id,teacher_id=teacher_id).first() if teacher_id else None
     latest=latest_submissions(db,plan.id)
@@ -156,13 +245,25 @@ def get_state(plan_id: int, user=Depends(require_user), db: Session=Depends(get_
         for c in run.payload['candidates']:
             task=next((t for t in tasks if t['id']==c['task_id']),None)
             if task is None:continue
-            if c['teacher_id']==teacher_id or can(user,'review',task): candidates.append({**c,'teacher_name':names.get(c['teacher_id'],'')})
+            if (not review_only and c['teacher_id']==teacher_id) or can(user,'review',task):
+                candidates.append({**c,'teacher_name':names.get(c['teacher_id'],'')})
     estimates={r.task_id:{**r.payload,'revision':r.revision} for r in db.query(TeacherWorkloadEstimate).filter_by(plan_id=plan.id,teacher_id=teacher_id)} if teacher_id else {}
     weights=get_match_weights(plan)
-    return {**plan_info(plan),'tasks':tasks,'workload_estimates':estimates,
+    info={**deepcopy(snapshot.payload['plan']),'state':'published'} if snapshot else plan_info(plan)
+    if plan.state!='published' and is_global(plan):
+        info['groups']=groups_in_cycle(db,plan)
+    if any(g['capability']=='lead' for g in getattr(user,'grants',[])):
+        info['groups']=sorted({task['group'] for task in tasks if task.get('group')})
+    from app.models.class_info import ClassInfo
+    visible_groups=set(info.get('groups') or [task['group'] for task in tasks])
+    if snapshot:
+        class_scopes=[{'name':task['group'],'grade':task.get('cohort'),'department':task.get('major') or task.get('department')} for task in tasks]
+    else:
+        class_scopes=[{'name':row.name,'grade':row.grade,'department':row.department} for row in db.query(ClassInfo).filter(ClassInfo.name.in_(visible_groups))]
+    return {**info,'tasks':tasks,'class_scopes':class_scopes,'snapshot_id':snapshot.id if snapshot else None,'workload_estimates':estimates,
         'match_weights':weights,'match_weight_items':weight_items(weights),'match_weight_total':weights_total(weights),
-        'draft':{'revision':draft.revision,'task_ids':draft.task_ids,'plan_revision':draft.plan_revision} if draft else {'revision':0,'task_ids':[],'plan_revision':plan.revision},
-        'submission':{'id':submitted.id,'task_ids':submitted.task_ids} if submitted else None,
+        'draft':({'revision':draft.revision,'task_ids':draft.task_ids,'plan_revision':draft.plan_revision} if draft else {'revision':0,'task_ids':[],'plan_revision':plan.revision}) if not review_only else {'revision':0,'task_ids':[],'plan_revision':plan.revision},
+        'submission':{'id':submitted.id,'task_ids':submitted.task_ids} if submitted and not review_only else None,
         'submission_count':len(latest) if can(user,'admin') or any(can(user,'review',t) for t in tasks) else None,
         'match':{'id':run.id,'maximum':run.payload.get('maximum',weights_total(weights)),'weights':run.payload.get('match_weights',weights),
             'candidates':candidates,'suggestions':[
@@ -186,13 +287,18 @@ def own_profile(user=Depends(require_user),db:Session=Depends(get_db)):
     return own_profile_response(db,tid)
 
 
+@router.get('/self-profile/directions')
+def own_profile_directions(user=Depends(require_user),db:Session=Depends(get_db)):
+    teacher_access(user)
+    return ['视觉传达设计','包装设计','智能交互设计','数字艺术','时尚传播']
+
+
 @router.get('/self-profile/courses')
 def own_course_catalog(user=Depends(require_user),db:Session=Depends(get_db)):
     teacher_access(user)
-    from app.models.planning import CurriculumDocument,ActiveCurriculum
+    from app.models.course import Course
     names={task.payload['name'] for task in db.query(TeachingTask).join(AcademicPlan).filter(AcademicPlan.state!='draft')}
-    for doc in db.query(CurriculumDocument).join(ActiveCurriculum,ActiveCurriculum.document_id==CurriculumDocument.id):
-        names.update(r['name'] for r in doc.rows if not r.get('category') or r['category'].startswith('专业'))
+    names.update(course.name for course in db.query(Course).filter(Course.is_active.is_(True)))
     return sorted(names)[:2000]
 
 
@@ -285,7 +391,7 @@ def update_task(plan_id:int,task_id:int,data:TaskInput,user=Depends(require_user
                               for s in db.query(PeriodSlot).filter_by(task_id=task.id).order_by(PeriodSlot.id)]
         if task.payload.get('source'):
             for key in ['code','name','credits','required_hours']:
-                if payload[key]!=task.payload[key]:raise HTTPException(409,'来源课程属性不可覆盖，请派生培养方案修订')
+                if payload[key]!=task.payload[key]:raise HTTPException(409,'课程来源字段不可在任务中覆盖，请在课程管理中修改课程信息')
             payload['source']=task.payload['source']
         from app.api.stage_designer import validate_spans
         all_others=[t for t in tasks_for(db,plan) if t['id']!=task_id]
@@ -494,6 +600,8 @@ def set_match_weights(plan_id:int,data:MatchWeightsInput,user=Depends(require_us
 
 @router.post('/plans/{plan_id}/match')
 def match(plan_id:int,user=Depends(require_user),db:Session=Depends(get_db)):
+    if not can(user, 'admin') and any(g['capability']=='lead' for g in getattr(user,'grants',[])):
+        raise HTTPException(403, '教研室主任不能运行全周期匹配，请由学院管理员统一运行')
     with write(db):
         plan=get_plan(db,plan_id);tasks=[t for t in tasks_for(db,plan) if t.get('start_week')]
         if not tasks or not all(can(user,'review',t) for t in tasks):raise HTTPException(403,'运行全计划匹配需要覆盖所有任务的审核授权')
@@ -659,6 +767,96 @@ def events(plan_id:int,user=Depends(require_user),db:Session=Depends(get_db)):
     check(user,'admin')
     return [{'id':e.id,'actor':e.actor,'action':e.action,'payload':e.payload,'created_at':e.created_at}
             for e in db.query(PlanningEvent).filter_by(plan_id=plan_id).order_by(PlanningEvent.id)]
+
+
+def _teacher_snapshot_task(db,plan_id,snapshot_id,task_id,teacher_id):
+    plan=get_plan(db,plan_id)
+    snapshot=db.get(PublishedPlan,snapshot_id)
+    latest=db.query(PublishedPlan.id).filter_by(plan_id=plan_id).order_by(PublishedPlan.id.desc()).first()
+    if plan.state!='published' or not snapshot or snapshot.plan_id!=plan_id or not latest or latest[0]!=snapshot_id:
+        raise HTTPException(409,'课表快照已变化，请刷新后重试')
+    task=next((row for row in snapshot.payload.get('tasks',[]) if row.get('id')==task_id),None)
+    if not task or teacher_id not in task.get('teacher_ids',[]):raise HTTPException(403,'只能确认或申请调整本人已发布课程')
+    return plan,snapshot,task
+
+
+@router.post('/plans/{plan_id}/confirm-schedule')
+def confirm_published_schedule(plan_id:int,data:ScheduleConfirmationInput,user=Depends(require_user),db:Session=Depends(get_db)):
+    teacher_id=teacher_access(user);_plan,snapshot,task=_teacher_snapshot_task(db,plan_id,data.snapshot_id,data.task_id,teacher_id)
+    existing=db.query(TeacherScheduleConfirmation).filter_by(snapshot_id=snapshot.id,task_id=data.task_id,teacher_id=teacher_id,status='confirmed').first()
+    if existing:raise HTTPException(409,'此课程已确认')
+    with write(db):
+        row=TeacherScheduleConfirmation(snapshot_id=snapshot.id,plan_id=plan_id,task_id=data.task_id,
+            teacher_id=teacher_id,status='confirmed',note=data.note.strip() or None)
+        db.add(row);event(db,user,'teacher_confirm_schedule',{'snapshot_id':snapshot.id,'task_id':data.task_id},plan_id)
+    return {'success':True,'confirmation_id':row.id}
+
+
+@router.post('/plans/{plan_id}/change-requests')
+def request_schedule_change(plan_id:int,data:ScheduleChangeRequestInput,user=Depends(require_user),db:Session=Depends(get_db)):
+    teacher_id=teacher_access(user);_plan,snapshot,task=_teacher_snapshot_task(db,plan_id,data.snapshot_id,data.task_id,teacher_id)
+    current=db.query(ScheduleChangeRequest).filter_by(snapshot_id=snapshot.id,task_id=data.task_id,teacher_id=teacher_id).all()
+    if any(not db.query(ScheduleChangeDecision.id).filter_by(request_id=row.id).first() for row in current):
+        raise HTTPException(409,'已有调课申请等待管理员处理')
+    with write(db):
+        row=ScheduleChangeRequest(snapshot_id=snapshot.id,plan_id=plan_id,task_id=data.task_id,teacher_id=teacher_id,
+            reason=data.reason.strip(),desired_change=data.desired_change.strip() or None)
+        db.add(row);db.flush();event(db,user,'schedule_change_requested',{'request_id':row.id,'task_id':data.task_id},plan_id)
+    return {'success':True,'request_id':row.id,'task_name':task['name']}
+
+
+@router.get('/plans/{plan_id}/change-requests')
+def list_schedule_change_requests(plan_id:int,user=Depends(require_user),db:Session=Depends(get_db)):
+    check(user,'admin');get_plan(db,plan_id);result=[]
+    for row in db.query(ScheduleChangeRequest).filter_by(plan_id=plan_id).order_by(ScheduleChangeRequest.id.desc()):
+        decision=db.query(ScheduleChangeDecision).filter_by(request_id=row.id).order_by(ScheduleChangeDecision.id.desc()).first()
+        result.append({'id':row.id,'snapshot_id':row.snapshot_id,'task_id':row.task_id,'teacher_id':row.teacher_id,
+            'reason':row.reason,'desired_change':row.desired_change,'status':decision.decision if decision else 'pending',
+            'decision_reason':decision.reason if decision else None,'revision_plan_id':decision.revision_plan_id if decision else None})
+    return result
+
+
+@router.post('/plans/{plan_id}/change-requests/{request_id}/decision')
+def decide_schedule_change(plan_id:int,request_id:int,data:ScheduleChangeDecisionInput,user=Depends(require_user),db:Session=Depends(get_db)):
+    check(user,'admin')
+    with write(db):
+        original=get_plan(db,plan_id);request=db.get(ScheduleChangeRequest,request_id)
+        if not request or request.plan_id!=plan_id:raise HTTPException(404,'调课申请不存在')
+        if db.query(ScheduleChangeDecision.id).filter_by(request_id=request.id).first():raise HTTPException(409,'该申请已处理')
+        snapshot=db.get(PublishedPlan,request.snapshot_id)
+        if not snapshot:raise HTTPException(409,'原课表快照不存在')
+        revision_plan=None
+        if data.approve:
+            payload=snapshot.payload['plan'];settings={**(original.settings or {}),'supersedes_plan_id':original.id,'revision_of_snapshot_id':snapshot.id}
+            revision_plan=AcademicPlan(name=f"{original.name} · 调整修订",start_date=original.start_date,weeks=original.weeks,
+                deadline=datetime.utcnow()+timedelta(days=14),state='draft',rule_confirmed=True,settings=settings)
+            db.add(revision_plan);db.flush()
+            for source in snapshot.payload.get('tasks',[]):
+                excluded={'id','plan_id','slots','teacher_ids','locked','room_name','teacher_names','applicants','applicant_count','actual_student_count'}
+                task_payload={key:value for key,value in source.items() if key not in excluded}
+                copied=TeachingTask(plan_id=revision_plan.id,payload=task_payload);db.add(copied);db.flush()
+                for slot in source.get('slots',[]):
+                    db.add(PeriodSlot(task_id=copied.id,day=slot['day'],start=slot['start'],count=slot['count'],phase=slot.get('phase','normal')))
+            affected={teacher for task in snapshot.payload.get('tasks',[]) for teacher in task.get('teacher_ids',[])}
+            for teacher_id in affected:
+                db.add(TeacherNotification(teacher_id=teacher_id,plan_id=revision_plan.id,kind='schedule_revision',
+                    payload={'request_id':request.id,'supersedes_plan_id':original.id,'message':'调课申请已批准，请在修订周期重新确认授课安排。'}))
+        else:
+            db.add(TeacherNotification(teacher_id=request.teacher_id,plan_id=plan_id,kind='change_request_rejected',
+                payload={'request_id':request.id,'message':data.reason.strip() or '调课申请未获批准'}))
+        decision=ScheduleChangeDecision(request_id=request.id,admin_actor=f"{'demo' if getattr(user, 'is_demo', False) else 'user'}:{user.id}",
+            decision='approved' if data.approve else 'rejected',reason=data.reason.strip() or None,
+            revision_plan_id=revision_plan.id if revision_plan else None)
+        db.add(decision);event(db,user,'schedule_change_decided',{'request_id':request.id,'decision':decision.decision,
+            'revision_plan_id':decision.revision_plan_id},plan_id)
+    return {'success':True,'decision':decision.decision,'revision_plan_id':decision.revision_plan_id}
+
+
+@router.get('/my-notifications')
+def my_planning_notifications(user=Depends(require_user),db:Session=Depends(get_db)):
+    teacher_id=teacher_access(user)
+    return [{'id':row.id,'plan_id':row.plan_id,'kind':row.kind,'payload':row.payload,'created_at':row.created_at}
+        for row in db.query(TeacherNotification).filter_by(teacher_id=teacher_id).order_by(TeacherNotification.id.desc())]
 
 
 @router.get('/history/published')

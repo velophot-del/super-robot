@@ -85,6 +85,8 @@ export default function TeachersPage() {
           { title: '工号', dataIndex: 'teacher_code', width: 100 },
           { title: '部门', dataIndex: 'department', width: 120 },
           { title: '职称', dataIndex: 'title', width: 100 },
+          { title: '职位', dataIndex: 'position', width: 130, render: (value: string) => value || '教师' },
+          { title: '审核专业方向', dataIndex: 'review_major', width: 130 },
           { title: '邮箱', dataIndex: 'email', width: 160 },
           { title: '每周最大课时', dataIndex: 'max_weekly_hours', width: 100 },
         ]}
@@ -101,6 +103,16 @@ export default function TeachersPage() {
             </Form.Item>
             <Form.Item name="title" label="职称">
               <Select options={['教授', '副教授', '讲师', '助教', '高级教师', '一级教师'].map(t => ({ label: t, value: t }))} />
+            </Form.Item>
+            <Form.Item name="position" label="职位" initialValue="教师">
+              <Select options={['教师', '教研室主任', '教研室副主任', '院长', '副院长'].map(value => ({label: value, value}))} />
+            </Form.Item>
+            <Form.Item noStyle shouldUpdate={(before, after) => before.position !== after.position}>
+              {({getFieldValue}) => ['教研室主任', '教研室副主任'].includes(getFieldValue('position')) ? (
+                <Form.Item name="review_major" label="审核专业方向" rules={[{required: true, message: '请选择审核专业方向'}]}>
+                  <Select options={['视觉传达设计', '包装设计', '智能交互设计', '数字艺术', '时尚传播'].map(value => ({label: value, value}))} />
+                </Form.Item>
+              ) : null}
             </Form.Item>
             <Form.Item name="email" label="邮箱">
               <Input placeholder="email@school.edu.cn" />

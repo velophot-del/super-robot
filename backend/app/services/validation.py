@@ -91,6 +91,13 @@ class ValidationService:
             self.errors.append({"field": "name", "message": "课程名称不能为空"})
         if not data.get("course_code"):
             self.errors.append({"field": "course_code", "message": "课程编码不能为空"})
+        semester = data.get("semester")
+        try:
+            valid_semester = semester is not None and 1 <= int(semester) <= 12
+        except (TypeError, ValueError):
+            valid_semester = False
+        if not valid_semester:
+            self.errors.append({"field": "semester", "message": "上课学期须填写1至12"})
 
         # 课时合理性
         if data.get("semester_sessions"):

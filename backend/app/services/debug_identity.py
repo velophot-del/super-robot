@@ -36,4 +36,7 @@ def demo_user(role: str, teacher_id: int | None, db: Session) -> User | None:
                    if role == 'teacher' else [
                        {'capability': cap, 'scope': 'all', 'scope_id': ''}
                        for cap in ['admin', 'review', 'publish']])
+    if role == 'teacher':
+        from app.services.teacher_positions import position_grants
+        user.grants.extend(position_grants(teacher))
     return user

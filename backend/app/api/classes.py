@@ -8,6 +8,7 @@ from app.models.class_info import ClassInfo
 from app.models.schedule import ScheduleEntry
 from app.models.course import Course
 from app.models.teacher import Teacher
+from app.models.planning import AcademicProgram
 from app.schemas.class_info import ClassInfoCreate, ClassInfoUpdate, ClassInfoResponse
 
 router = APIRouter(prefix="/api/classes", tags=["班级管理"])
@@ -17,7 +18,7 @@ router = APIRouter(prefix="/api/classes", tags=["班级管理"])
 def list_classes(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
-    grade: str = Query(None, description="按年级筛选"),
+    grade: str = Query(None, description="按入学年级筛选"),
     search: str = Query(None, description="搜索班级名称"),
     db: Session = Depends(get_db),
 ):
@@ -110,7 +111,12 @@ def create_class(data: ClassInfoCreate, db: Session = Depends(get_db)):
     existing = db.query(ClassInfo).filter(ClassInfo.name == data.name).first()
     if existing:
         raise HTTPException(status_code=400, detail=f"班级'{data.name}'已存在")
-    cls = ClassInfo(**data.model_dump())
+    values=data.model_dump()
+    validate_program(db,values.get('program_id'))
+    if not values.get('program_id') and values.get('department'):
+        program=db.query(AcademicProgram).filter_by(name=values['department']).first()
+        if program:values['program_id']=program.id
+    cls = ClassInfo(**values)
     db.add(cls)
     db.commit()
     db.refresh(cls)
@@ -124,6 +130,7 @@ def update_class(class_id: int, data: ClassInfoUpdate, db: Session = Depends(get
     if not cls:
         raise HTTPException(status_code=404, detail="班级不存在")
     update_data = data.model_dump(exclude_unset=True)
+    if 'program_id' in update_data:validate_program(db,update_data['program_id'])
     for key, value in update_data.items():
         setattr(cls, key, value)
     db.commit()
@@ -149,3 +156,8 @@ def delete_class(class_id: int, db: Session = Depends(get_db)):
     db.delete(cls)
     db.commit()
     return {"ok": True, "message": f"班级「{cls.name}」已删除"}
+
+
+def validate_program(db, program_id):
+    if program_id is not None and not db.get(AcademicProgram,program_id):
+        raise HTTPException(422,'所选专业不存在')

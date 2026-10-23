@@ -20,6 +20,8 @@
 
 ## Checks
 
+- Administrator-managed Teacher.position (主任 or 副主任) and review_major contribute scoped lead@dept access for the bound teacher account; demotion removes only appointment-derived access. Never derive review scope from self-declared profiles or create/claim accounts when editing appointments.
+
 From `backend`:
 
 ```bash

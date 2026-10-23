@@ -19,9 +19,11 @@ interface DataTableProps {
   filterData?: (rows: any[]) => any[];
   extraFilters?: React.ReactNode;
   extraRowActions?: (record: any) => React.ReactNode;
+  extraToolbar?: React.ReactNode;
+  bulkActions?: (selectedRows: any[], clearSelection: () => void) => React.ReactNode;
 }
 
-export default function DataTable({ title, columns, formFields, api, extraFilters, extraRowActions, filterData }: DataTableProps) {
+export default function DataTable({ title, entityType, columns, formFields, api, extraFilters, extraRowActions, filterData, extraToolbar, bulkActions }: DataTableProps) {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [data, setData] = useState<any[]>([]);
@@ -30,6 +32,8 @@ export default function DataTable({ title, columns, formFields, api, extraFilter
   const [modalOpen, setModalOpen] = useState(false);
   const [editingRecord, setEditingRecord] = useState<any>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
+  const [selectedRows, setSelectedRows] = useState<any[]>([]);
   const [form] = Form.useForm();
 
   const loadData = async (searchText = '') => {
@@ -47,6 +51,7 @@ export default function DataTable({ title, columns, formFields, api, extraFilter
   useEffect(() => { loadData(); }, []);
 
   useEffect(() => { setPage(1); }, [filterData]);
+  useEffect(() => { setSelectedRowKeys([]); setSelectedRows([]); }, [filterData]);
 
   const rows = useMemo(() => filterData ? filterData(data) : data, [data, filterData]);
   // 服务端搜索或删除后数据量可能变小，受控页码需要回到有效范围内。
@@ -58,6 +63,8 @@ export default function DataTable({ title, columns, formFields, api, extraFilter
   const handleSearch = (value: string) => {
     setSearch(value);
     setPage(1);
+    setSelectedRowKeys([]);
+    setSelectedRows([]);
     loadData(value);
   };
 
@@ -76,7 +83,7 @@ export default function DataTable({ title, columns, formFields, api, extraFilter
   const handleDelete = async (id: number) => {
     try {
       await api.delete(id);
-      message.success('删除成功');
+      message.success(entityType === 'courses' ? '已移出活动课程库' : '删除成功');
       loadData(search);
     } catch (e: any) {
       message.error(`删除失败: ${e.message}`);
@@ -113,9 +120,9 @@ export default function DataTable({ title, columns, formFields, api, extraFilter
         <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)}>
           编辑
         </Button>
-        <Popconfirm title="确认删除?" onConfirm={() => handleDelete(record.id)} okText="确认" cancelText="取消">
+        <Popconfirm title={entityType === 'courses' ? '移出活动课程库？历史课表记录会保留。' : '确认删除?'} onConfirm={() => handleDelete(record.id)} okText="确认" cancelText="取消">
           <Button type="link" size="small" danger icon={<DeleteOutlined />}>
-            删除
+            {entityType === 'courses' ? '移出' : '删除'}
           </Button>
         </Popconfirm>
       </Space>
@@ -135,6 +142,7 @@ export default function DataTable({ title, columns, formFields, api, extraFilter
             style={{ width: 240 }}
           />
           {extraFilters}
+          {extraToolbar}
           <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>
             添加
           </Button>
@@ -145,6 +153,13 @@ export default function DataTable({ title, columns, formFields, api, extraFilter
         dataSource={rows}
         columns={[...columns, actionColumn]}
         rowKey="id"
+        rowSelection={bulkActions ? {
+          selectedRowKeys,
+          onChange: (keys, selectedRows) => {
+            setSelectedRowKeys(keys);
+            setSelectedRows(selectedRows);
+          },
+        } : undefined}
         loading={loading}
         pagination={{
           current: page,
@@ -159,6 +174,7 @@ export default function DataTable({ title, columns, formFields, api, extraFilter
         scroll={{ x: 900 }}
         style={{ border: '1px solid #e3e8ee', borderRadius: 8 }}
       />
+        {bulkActions&&selectedRowKeys.length>0&&<div style={{marginTop:12}}>{bulkActions(selectedRows,()=>{setSelectedRowKeys([]);setSelectedRows([]);})}</div>}
 
       <Modal
         title={editingRecord ? `编辑${title}` : `添加${title}`}
@@ -169,7 +185,7 @@ export default function DataTable({ title, columns, formFields, api, extraFilter
         width={560}
         destroyOnClose
       >
-        <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
+        <Form form={form} layout="vertical" autoComplete="off" style={{ marginTop: 16 }}>
           {formFields(form)}
         </Form>
       </Modal>

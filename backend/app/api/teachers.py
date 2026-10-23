@@ -133,6 +133,8 @@ def create_teacher(data: TeacherCreate, db: Session = Depends(get_db)):
     ).first()
     if existing:
         raise HTTPException(status_code=400, detail="教师工号或邮箱已存在")
+    from app.services.teacher_positions import validate_position
+    validate_position(data.position, data.review_major)
     teacher = Teacher(**data.model_dump())
     db.add(teacher)
     db.commit()
@@ -146,6 +148,9 @@ def update_teacher(teacher_id: int, data: TeacherUpdate, db: Session = Depends(g
     if not teacher:
         raise HTTPException(status_code=404, detail="教师不存在")
     update_data = data.model_dump(exclude_unset=True)
+    from app.services.teacher_positions import validate_position
+    validate_position(update_data.get('position', teacher.position),
+                      update_data.get('review_major', teacher.review_major))
     for key, value in update_data.items():
         setattr(teacher, key, value)
     db.commit()

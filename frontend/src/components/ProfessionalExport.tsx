@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Alert, Button, Empty, Modal, Select, Space, message } from 'antd';
 import { planningApi } from '../api/planning';
+import { gradeLabel } from '../lib/adminStageGrid';
 
 type ExportOption = {major:string;start_date:string;weeks:number;cohort:string;term:string};
 
@@ -39,7 +40,7 @@ export default function ProfessionalExport(){
             options={terms.map(o=>({value:termKey(o),label:`${o.term} · ${o.start_date}起 · ${o.weeks}周`}))}
             onChange={value=>{setTerm(value);setCohort(undefined);}}/></label>
           <label>年级<Select aria-label="导出年级" style={{width:'100%'}} value={cohort} placeholder="全部年级（分别分页）" allowClear
-            options={cohorts.map(c=>({value:c,label:c?`${c}级`:'未设置年级'}))} onChange={setCohort}/></label>
+            options={cohorts.map(c=>({value:c,label:gradeLabel(c)||'未设置年级'}))} onChange={setCohort}/></label>
         </>}
       </Space>
     </Modal></>;

@@ -37,7 +37,7 @@ const dataMenu = [
 ];
 
 export default function AppLayout() {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout } = useAuth();
@@ -45,14 +45,12 @@ export default function AppLayout() {
     {key:'/planning',icon:<BookOutlined/>,label:'排课周期计划'},
     {key:'/planning/review',icon:<ScheduleOutlined/>,label:'匹配与审核'},
     ...dataMenu,
-    {key:'/materials',icon:<ImportOutlined/>,label:'培养方案与课程来源'},
     {key:'/timetable',icon:<ScheduleOutlined/>,label:'历史课表'},
   ] : [
     ...(can(user,'teaching') ? [{key:'/profile',icon:<UserOutlined/>,label:'个人资料'}] : []),
     { key:'/planning', icon:<BookOutlined />, label:can(user,'teaching')?'选课工作台':'计划、匹配与审核' },
-    ...(can(user,'teaching')&&(can(user,'admin')||can(user,'review')||can(user,'publish')) ? [{key:'/planning/review',icon:<ScheduleOutlined/>,label:'管理与审核工作台'}] : []),
+    ...(can(user,'teaching')&&(can(user,'admin')||can(user,'review')||can(user,'publish')) ? [{key:'/planning/review',icon:<ScheduleOutlined/>,label:user?.grants?.some(g=>g.capability==='lead')?'教研室主任审核':'管理与审核工作台'}] : []),
     ...(can(user,'admin') ? dataMenu : []),
-    ...(can(user,'admin') ? [{key:'/materials',icon:<ImportOutlined/>,label:'培养方案与课程来源'}] : []),
     ...(can(user,'teaching') ? [{key:'/planning/matches',icon:<BookOutlined/>,label:'我的匹配结果'}] : []),
     { key:'/timetable', icon:<ScheduleOutlined />, label:can(user,'teaching')?'我的课表':'历史课表查看' },
   ];
@@ -78,10 +76,10 @@ export default function AppLayout() {
         trigger={null}
         collapsible
         collapsed={collapsed}
-        width={240}
+        width={216}
         style={{
-          background: '#0d253d',
-          borderRight: '1px solid rgba(227, 232, 238, 0.15)',
+          background: '#ffffff',
+          borderRight: '1px solid #e6e8ec',
         }}
       >
         {/* Logo */}
@@ -92,19 +90,19 @@ export default function AppLayout() {
             alignItems: 'center',
             justifyContent: collapsed ? 'center' : 'flex-start',
             padding: collapsed ? 0 : '0 20px',
-            borderBottom: '1px solid rgba(227, 232, 238, 0.1)',
+            borderBottom: '1px solid #e6e8ec',
           }}
         >
           <ThunderboltOutlined
-            style={{ fontSize: 24, color: '#533afd', marginRight: collapsed ? 0 : 10 }}
+            style={{ fontSize: 24, color: '#c26345', marginRight: collapsed ? 0 : 10 }}
           />
           {!collapsed && (
             <Text
               strong
               style={{
-                color: '#ffffff',
+                color: '#292c32',
                 fontSize: 16,
-                letterSpacing: '-0.2px',
+                letterSpacing: 0,
               }}
             >
               AI 智能排课
@@ -114,7 +112,7 @@ export default function AppLayout() {
 
         {/* 菜单 */}
         <Menu
-          theme="dark"
+          theme="light"
           mode="inline"
           selectedKeys={[selectedKey]}
           defaultOpenKeys={openKeys}
@@ -142,14 +140,15 @@ export default function AppLayout() {
             height: 56,
           }}
         >
-          <Button
+          <Space size={14}><Button
             type="text"
+            aria-label={collapsed?'展开导航':'收起导航'}
             icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
             onClick={() => setCollapsed(!collapsed)}
-          />
+          /><div><Text strong style={{fontSize:16}}>视觉传达设计学院</Text><div style={{fontSize:12,color:'#7c838e',lineHeight:'18px'}}>课程教学管理</div></div></Space>
           <Space size={16}>
-            <Text type="secondary" style={{ fontSize: 13 }}>
-              欢迎使用智能排课系统
+            <Text className="header-context" type="secondary" style={{ fontSize: 13 }}>
+              学院教学管理 · 排课与选课
             </Text>
             <Dropdown
               menu={{
@@ -175,7 +174,7 @@ export default function AppLayout() {
               }}
             >
               <Avatar
-                style={{ backgroundColor: '#533afd', cursor: 'pointer' }}
+                style={{ backgroundColor: '#516c65', cursor: 'pointer' }}
                 icon={<UserOutlined />}
               />
             </Dropdown>
@@ -184,10 +183,10 @@ export default function AppLayout() {
 
         <Content
           style={{
-            margin: 20,
-            padding: 24,
-            background: '#ffffff',
-            borderRadius: 8,
+            margin: 0,
+            padding: '20px 24px',
+            background: '#f4f5f7',
+            borderRadius: 0,
             minHeight: 280,
             overflow: 'auto',
           }}
@@ -204,7 +203,7 @@ export default function AppLayout() {
             padding: '12px 24px',
           }}
         >
-          AI驱动一体化智能排课平台 ©2025 — 遗传算法 · 约束学习 · 智能优化
+          学院课程教学管理
         </Footer>
       </Layout>
     </Layout>

@@ -1,126 +1,36 @@
-/* 全局样式 - Stripe 设计系统 */
-/* 参考: DESIGN.md - Stripe-Inspired Design Analysis */
-
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
-
-html, body, #root {
-  height: 100%;
-  font-family: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Display",
-    "Segoe UI", Roboto, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  background: #f6f9fc;
-  color: #0d253d;
-}
-
-/* Ant Design 菜单覆盖 - Stripe Navy 侧边栏 */
-.ant-menu-dark {
-  background: #0d253d !important;
-}
-
-.ant-menu-dark .ant-menu-item-selected {
-  background: #533afd !important;
-}
-
-.ant-menu-dark .ant-menu-sub {
-  background: rgba(0, 0, 0, 0.15) !important;
-}
-
-/* 卡片边框 */
-.ant-card-bordered {
-  border-color: #e3e8ee !important;
-}
-
-/* 按钮风格 */
-.ant-btn-primary {
-  box-shadow: 0 1px 3px rgba(83, 58, 253, 0.3);
-}
-
-.ant-btn-primary:hover {
-  box-shadow: 0 2px 6px rgba(83, 58, 253, 0.4);
-}
-
-/* 表格 */
-.ant-table {
-  border-radius: 8px;
-}
-
-.ant-table-thead > tr > th {
-  background: #f6f9fc !important;
-  color: #0d253d !important;
-  font-weight: 600 !important;
-  font-size: 13px !important;
-}
-
-/* 输入框 */
-.ant-input,
-.ant-picker,
-.ant-select-selector {
-  border-color: #e3e8ee !important;
-}
-
-.ant-input:hover,
-.ant-picker:hover,
-.ant-select-selector:hover {
-  border-color: #533afd !important;
-}
-
-.ant-input:focus,
-.ant-picker-focused,
-.ant-select-focused .ant-select-selector {
-  border-color: #533afd !important;
-  box-shadow: 0 0 0 2px rgba(83, 58, 253, 0.15) !important;
-}
-
-/* 进度条 */
-.ant-progress-text {
-  color: #0d253d !important;
-  font-weight: 600 !important;
-}
-
-/* 统计组件 */
-.ant-statistic-title {
-  color: #64748d !important;
-  font-size: 13px !important;
-}
-
-/* 滚动条 */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  background: #d0d6e0;
-  border-radius: 3px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: #a0a8b0;
-}
-
-/* 标签风格 */
-.ant-tag {
-  border-radius: 9999px;
-}
-
-/* 弹窗 */
-.ant-modal-content {
-  border-radius: 10px;
-}
-
-/* 描述列表 */
-.ant-descriptions-bordered .ant-descriptions-item-label {
-  background: #f6f9fc;
-  color: #64748d;
-}
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600&display=swap');
+* { margin:0; padding:0; box-sizing:border-box; letter-spacing:0; }
+html,body,#root { min-height:100%; font-family:Inter,"Noto Sans SC",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:#f4f5f7; color:#252830; -webkit-font-smoothing:antialiased; }
+.ant-layout { min-width:0; }
+.ant-layout-sider { background:#fff !important; }
+.ant-menu-light .ant-menu-item-selected { background:#f0f1f3; color:#202124; font-weight:600; }
+.ant-card { border-color:#e5e7eb; box-shadow:0 1px 3px #18202b06; }
+.ant-table-thead>tr>th { background:#f8f9fa !important; font-size:14px !important; font-weight:600; }
+.ant-tag { border-radius:4px; }
+.ant-modal-content { border-radius:8px; }
+::-webkit-scrollbar { width:8px; height:8px; }
+::-webkit-scrollbar-thumb { background:#cbd0d8; border-radius:4px; }
+.selection-workspace { display:flex; flex-direction:column; gap:18px; width:100%; min-width:0; }
+.selection-header { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; }
+.selection-filters { display:flex; flex-wrap:wrap; gap:12px; align-items:center; padding:14px 16px; border:1px solid #e5e7eb; background:#fff; border-radius:8px; }
+.selection-summary { display:flex; flex-wrap:wrap; gap:28px; padding:12px 0; border-bottom:1px solid #e5e7eb; }
+.selection-summary strong { font-size:22px; color:#252830; margin-right:7px; }
+.selection-summary span { color:#68707d; font-size:14px; }
+.stage-table-scroll { overflow-x:auto; width:100%; border:1px solid #dfe2e7; border-radius:6px; }
+.college-stage-table { border-collapse:collapse; table-layout:fixed; width:100%; font-size:14px; }
+.college-stage-table th,.college-stage-table td { border:1px solid #e1e4e9; }
+.college-stage-table td { background:#fff; }
+.selection-cycle { min-width:0; padding:0 0 20px; border-bottom:1px solid #dfe2e7; }
+@media(max-width:760px) { .header-context { display:none; } .ant-layout-header { padding:0 12px !important; } }
+@media(max-width:760px) { .selection-filters>.ant-space,.selection-filters .ant-space-item { width:100%; max-width:100%; } .selection-filters label { display:block; } .selection-filters .ant-input-affix-wrapper { width:100% !important; } }
+.college-stage-table thead th { padding:8px 2px; background:#f3f4f6; white-space:nowrap; font-size:13px; }
+.college-stage-table thead .week-date { font-size:12px; font-weight:400; background:#fff; }
+.college-stage-table .scope-cell { position:sticky; z-index:2; background:#fff; padding:5px; font-size:13px; text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.stage-week-cell { position:absolute; height:100%; border-right:1px solid #eceef1; font-size:12px; color:#878b93; text-align:center; }
+.stage-week-cell.is-exam { background:#f7eeee; color:#a16b6b; }
+.selection-course { position:absolute; height:84px; padding:3px 6px; border:1px solid #b5c5d8; background:#edf3fa; border-radius:4px; overflow:hidden; }
+.selection-course.is-selected { background:#eaf4ef; border-color:#6b9b82; }
+.selection-course .selection-course-title { display:block; width:100%; padding:0; height:23px; line-height:23px; font-size:14px; font-weight:600; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.course-secondary { font-size:12px; line-height:17px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.selection-course .ant-checkbox-wrapper { font-size:12px; line-height:18px; }
+@media(max-width:760px) { .ant-layout-content { padding:14px 10px !important; } .selection-filters>label { flex:1 1 140px; } .selection-filters .ant-select { width:100% !important; min-width:0 !important; } .selection-summary { gap:16px; } }

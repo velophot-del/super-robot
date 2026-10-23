@@ -1,20 +1,24 @@
 // 班级管理页面（含查看课程分配）
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
-  Form, Input, InputNumber, Select, Button, Drawer, Table, Descriptions,
+  Form, Input, InputNumber, Switch, Button, Drawer, Table, Descriptions, Select,
   Statistic, Row, Col, Empty, message, Tag,
 } from 'antd';
 import { EyeOutlined } from '@ant-design/icons';
 import DataTable from '../../components/DataTable';
 import { classApi } from '../../api/client';
 import type { ClassCoursesResponse } from '../../types';
+import { planningApi } from '../../api/planning';
 
+const cohortLabel = (value:string) => /^\d{4}(届|级)?$/.test(value||'') ? `${value.slice(0,4)}级` : '待补录年级';
 
 export default function ClassesPage() {
   const [courseDrawerOpen, setCourseDrawerOpen] = useState(false);
   const [selectedClass, setSelectedClass] = useState<{ id: number; name: string; grade: string; department?: string } | null>(null);
   const [classCourses, setClassCourses] = useState<ClassCoursesResponse | null>(null);
   const [coursesLoading, setCoursesLoading] = useState(false);
+  const [programs,setPrograms]=useState<any[]>([]);
+  useEffect(()=>{void planningApi.programs().then(setPrograms).catch(()=>setPrograms([]));},[]);
 
   const handleViewCourses = async (record: any) => {
     setSelectedClass({ id: record.id, name: record.name, grade: record.grade, department: record.department });
@@ -56,25 +60,32 @@ export default function ClassesPage() {
         columns={[
           { title: 'ID', dataIndex: 'id', width: 60 },
           { title: '班级名称', dataIndex: 'name', width: 140 },
-          { title: '年级', dataIndex: 'grade', width: 80 },
+          { title: '年级', dataIndex: 'grade', width: 100, render: (v:string) => cohortLabel(v) },
           { title: '学生人数', dataIndex: 'student_count', width: 90 },
           { title: '所属专业', dataIndex: 'department', width: 120 },
+          { title: '状态', dataIndex: 'is_active', width: 80, render: (v:boolean) => v ? '有效' : '停用' },
           { title: '班主任', dataIndex: 'homeroom_teacher', width: 100 },
           { title: '备注', dataIndex: 'remarks', ellipsis: true },
         ]}
         formFields={() => (
           <>
             <Form.Item name="name" label="班级名称" rules={[{ required: true }]}>
-              <Input placeholder="如: 计科1班" />
+              <Input placeholder="如: 计科1班" autoComplete="off" />
             </Form.Item>
-            <Form.Item name="grade" label="年级" rules={[{ required: true }]}>
-              <Select options={['大一', '大二', '大三', '大四'].map(g => ({ label: g, value: g }))} />
+            <Form.Item name="grade" label="入学年级" rules={[{ required: true },{pattern:/^\d{4}(届|级)?$/,message:'请输入四位入学年份，如2026'}]}>
+              <Input placeholder="如：2026" autoComplete="off" />
             </Form.Item>
             <Form.Item name="student_count" label="学生人数">
               <InputNumber min={1} max={200} style={{ width: '100%' }} />
             </Form.Item>
             <Form.Item name="department" label="所属专业">
               <Input placeholder="如: 计算机科学" />
+            </Form.Item>
+            <Form.Item name="program_id" label="标准专业">
+              <Select allowClear showSearch optionFilterProp="label" placeholder="关联标准专业" options={programs.map(p=>({value:p.id,label:`${p.name}（${p.code}）`}))}/>
+            </Form.Item>
+            <Form.Item name="is_active" label="纳入排课" valuePropName="checked" initialValue={true}>
+              <Switch checkedChildren="有效" unCheckedChildren="停用" />
             </Form.Item>
             <Form.Item name="homeroom_teacher" label="班主任">
               <Input placeholder="班主任姓名" />
@@ -108,7 +119,7 @@ export default function ClassesPage() {
         {selectedClass && (
           <Descriptions size="small" column={3} style={{ marginBottom: 20 }}>
             <Descriptions.Item label="班级">{selectedClass.name}</Descriptions.Item>
-            <Descriptions.Item label="年级">{selectedClass.grade}</Descriptions.Item>
+            <Descriptions.Item label="年级">{cohortLabel(selectedClass.grade)}</Descriptions.Item>
             <Descriptions.Item label="所属专业">{selectedClass.department || '未设置'}</Descriptions.Item>
           </Descriptions>
         )}

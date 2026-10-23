@@ -15,3 +15,12 @@ test('new workspace checks explicit capabilities, never an admin label', async()
   const user={grants:[{capability:'teaching',scope:'self',scope_id:''},{capability:'review',scope:'dept',scope_id:'Design'}]};
   assert.equal(can(user,'teaching'),true);assert.equal(can(user,'review'),true);assert.equal(can(user,'publish'),false);
 });
+
+test('department head capability exposes review navigation but not admin or publication', async()=>{
+  const {can}=await import('../src/lib/accessPolicy.ts');
+  const user={grants:[{capability:'teaching',scope:'self',scope_id:''},{capability:'lead',scope:'dept',scope_id:'Design'}]};
+  assert.equal(can(user,'teaching'),true);
+  assert.equal(can(user,'review'),true);
+  assert.equal(can(user,'admin'),false);
+  assert.equal(can(user,'publish'),false);
+});
