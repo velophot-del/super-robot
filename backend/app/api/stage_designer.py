@@ -26,6 +26,7 @@ class PlacementInput(BaseModel):
     document_id:int|None=None
     group:str=Field(min_length=1,max_length=100)
     start_week:int=Field(ge=1,le=20)
+    # 兼容旧客户端；实际周数始终取自课程库或现有任务，不再接受人工覆盖。
     duration:int|None=Field(None,ge=1,le=20)
 
 
@@ -143,7 +144,7 @@ def place_course(plan_id:int,data:PlacementInput,user=Depends(require_user),db:S
             task=db.get(TeachingTask,data.task_id)
             if not task or task.plan_id!=plan.id:raise HTTPException(404,'课程任务不存在')
             payload=dict(task.payload);meta=payload.get('source',{}).get('course_metadata',{})
-            duration=data.duration or ((payload['end_week']-payload['start_week']+1) if payload.get('start_week') else meta.get('teaching_weeks'))
+            duration=(payload['end_week']-payload['start_week']+1) if payload.get('start_week') else meta.get('teaching_weeks')
         else:
             _,rows=pool_rows(db,plan)
             candidates=[row for row in rows if row['id']==data.course_id and data.group in row.get('groups',[])]
@@ -156,9 +157,9 @@ def place_course(plan_id:int,data:PlacementInput,user=Depends(require_user),db:S
                        and t.get('source',{}).get('course_id')==course.id),None)
             payload=dict(task.payload) if task else {k:row[k] for k in ['name','code','credits','required_hours','direction','tags']}
             meta={k:v for k,v in row.items() if k not in {'id','document_id','major','cohort','groups'}}
-            duration=data.duration or row.get('teaching_weeks')
+            duration=row.get('teaching_weeks')
             payload.update(source={'course_id':course.id,'major':row['major'],'cohort':row['cohort'],'course_metadata':meta})
-        if not duration:raise HTTPException(422,'方案未注明上课周数，请先明确课程占用周数')
+        if not duration:raise HTTPException(422,'课程库未提供授课周数，请先在课程数据中补齐')
         old_group=payload.get('group')
         department=payload.get('department') or (row.get('major') if not data.task_id else '') or (plan.settings or {}).get('major','')
         payload.update(group=data.group,class_name=data.group,department=department,

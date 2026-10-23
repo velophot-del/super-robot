@@ -51,6 +51,14 @@ def course_catalog_scope(db, start_date, term, allowed_groups=None, major=None, 
     return scope
 
 
+def effective_teaching_weeks(course):
+    """课程授课周数：优先使用教学计划值；缺失时按学期次数÷每周次数向上取整。"""
+    if course.teaching_weeks:
+        return course.teaching_weeks
+    weekly = max(course.weekly_sessions or 1, 1)
+    return max(1, ((course.semester_sessions or 0) + weekly - 1) // weekly)
+
+
 def course_pool_rows(scope):
     """生成甘特图课程池需要的扁平课程—班级行。"""
     rows = []
@@ -71,7 +79,7 @@ def course_pool_rows(scope):
                 'required_hours': course.total_hours or course.semester_sessions * course.hours_per_session,
                 'course_type': course.course_type,
                 'course_nature': course.course_nature,
-                'teaching_weeks': course.teaching_weeks or course.semester_sessions,
+                'teaching_weeks': effective_teaching_weeks(course),
                 'weekly_hours': course.weekly_sessions * course.hours_per_session,
                 'tail_hours': course.tail_hours,
                 'direction': '',

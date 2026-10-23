@@ -11,6 +11,7 @@ import TeachersPage from './pages/DataManagement/TeachersPage';
 import CoursesPage from './pages/DataManagement/CoursesPage';
 import ClassroomsPage from './pages/DataManagement/ClassroomsPage';
 import AISettingsPage from './pages/AISettingsPage';
+import DataDownloadPage from './pages/DataDownloadPage';
 import AdminHistoryPage from './pages/AdminHistoryPage';
 import TeacherMatchPage from './pages/TeacherMatchPage';
 import TeacherTimetablePage from './pages/TeacherTimetablePage';
@@ -92,6 +93,7 @@ export default function App() {
                 <Route path="/data/teachers" element={<TeachersPage />} />
                 <Route path="/data/courses" element={<CoursesPage />} />
                 <Route path="/data/classrooms" element={<ClassroomsPage />} />
+                <Route path="/data/download" element={<DataDownloadPage />} />
                 <Route path="/settings/ai" element={<AISettingsPage />} />
                 </Route>
                 <Route path="/timetable" element={<TimetableRoute />} />

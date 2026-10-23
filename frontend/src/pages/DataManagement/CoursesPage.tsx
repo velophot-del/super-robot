@@ -68,7 +68,7 @@ export default function CoursesPage() {
         <Tabs type="card" activeKey={gradeTab} onChange={setGradeTab}
           items={GRADE_COHORTS.map(cohort => ({key: cohort, label: `${cohort}级`}))} style={{marginBottom:0}}/>
       </div>
-      <span style={{color:'#8c8c8c',fontSize:12}}>每个页签展示该届学生培养方案中的全部课程（含 4 年学期）</span>
+      <span style={{color:'#8c8c8c',fontSize:12}}>每个页签展示该届学生培养方案中的全部课程；授课周数取教学计划，缺失时按学期次数÷每周次数自动计算</span>
     </div>
     <Space wrap style={{marginBottom:16}}>
       {([['course_type','课程类型'],['category','课程性质'],['department','专业']] as const).map(([key,label]) =>
@@ -103,7 +103,10 @@ export default function CoursesPage() {
             const cohorts = courseCohorts(r);
             return cohorts.length ? cohorts.map(gradeLabel).join('、') : '不限';
         } },
-        { title: '授课周数', dataIndex: 'teaching_weeks', width: 85, render: (v:number|null) => v??'按学期次数' },
+        { title: '授课周数', dataIndex: 'teaching_weeks', width: 100, render: (v:number|null, r:any) => {
+            const weeks=v||Math.max(1,Math.ceil((r.semester_sessions||0)/Math.max(r.weekly_sessions||1,1)));
+            return `${weeks} 周${v?'':'（自动）'}`;
+        } },
         { title: '总课时', dataIndex: 'total_hours', width: 70, render: (v: number|null) => v ?? '-' },
         { title: '学分', dataIndex: 'credits', width: 60 },
         { title: '需连排', dataIndex: 'requires_consecutive', width: 70, render: (v: boolean) => v ? '是' : '否' },
@@ -122,7 +125,6 @@ export default function CoursesPage() {
         <Form.Item name="cohort" label="适用年级"><Select allowClear showSearch placeholder="不修改" options={[{value:'__clear__',label:'不限年级'},...options.cohort.map(value=>({value,label:gradeLabel(value)}))]}/></Form.Item>
         <Form.Item name="department" label="适用专业"><Select allowClear showSearch placeholder="不修改" options={[{value:'__clear__',label:'通用课程'},...options.department.map(value=>({value,label:value}))]}/></Form.Item>
         <Form.Item name="offering_unit_id" label="开课单位"><Select allowClear showSearch placeholder="不修改" options={[{value:'__clear__',label:'清空开课单位'},...units.map(unit=>({value:unit.id,label:unit.name}))]}/></Form.Item>
-        <Form.Item name="teaching_weeks" label="授课周数"><InputNumber min={1} max={20} style={{width:'100%'}} placeholder="不修改"/></Form.Item>
         <Form.Item name="is_active" label="课程状态"><Select allowClear placeholder="不修改" options={[{value:true,label:'纳入课程库'},{value:false,label:'停用'}]}/></Form.Item>
       </Form>
     </Modal>
@@ -168,7 +170,6 @@ function CourseFields({ form,teachers,teacherLoading,teacherError,units }: { for
               <Select placeholder="选择课程上课学期" options={Array.from({length:12},(_,i)=>({value:i+1,label:`第${i+1}学期`}))} />
             </Form.Item>
             <Form.Item name="cohort" label="适用年级"><Input placeholder="如：2026；留空表示适用于所有匹配年级"/></Form.Item>
-            <Form.Item name="teaching_weeks" label="授课周数"><InputNumber min={1} max={20} style={{width:'100%'}} placeholder="留空按学期教学次数"/></Form.Item>
             <Form.Item name="semester_sessions" label="学期教学次数" rules={[{ required: true }]} help="一学期总共上几次课">
               <InputNumber min={1} max={40} style={{ width: '100%' }} />
             </Form.Item>

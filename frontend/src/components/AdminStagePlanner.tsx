@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, AutoComplete, Button, Card, Empty, Input, InputNumber, Modal, Popconfirm, Select, Space, Spin, Table, Tag, Tooltip, Typography, message } from 'antd';
+import { Alert, AutoComplete, Button, Card, Empty, Input, Modal, Popconfirm, Select, Space, Spin, Table, Tag, Tooltip, Typography, message } from 'antd';
 import { InfoCircleOutlined, MinusOutlined, PlusOutlined, MenuFoldOutlined, MenuUnfoldOutlined, RobotOutlined } from '@ant-design/icons';
 import { planningApi as api } from '../api/planning';
 import { weekDates } from '../lib/selectionGrid';
@@ -14,7 +14,7 @@ export default function AdminStagePlanner({plan,classes=[],onChange,onEdit}:{pla
   const [schedulePreview,setSchedulePreview]=useState<any>();
   const [aiOpen,setAiOpen]=useState(false),[aiLoading,setAiLoading]=useState(false),[aiResult,setAiResult]=useState<any>();
   const [newGroup,setNewGroup]=useState(''),[removeGroup,setRemoveGroup]=useState<string>();
-  const [selected,setSelected]=useState<DragItem>(),[duration,setDuration]=useState<Record<number,number|undefined>>({}),[busy,setBusy]=useState(false),[error,setError]=useState('');
+  const [selected,setSelected]=useState<DragItem>(),[busy,setBusy]=useState(false),[error,setError]=useState('');
   const [poolOpen,setPoolOpen]=useState(true);
   const [helpOpen,setHelpOpen]=useState(false),[selectedCohort,setSelectedCohort]=useState('__all__'),[selectedMajor,setSelectedMajor]=useState('__all__');
   const pointer=useRef<{item:DragItem;name:string}|null>(null);
@@ -163,13 +163,15 @@ export default function AdminStagePlanner({plan,classes=[],onChange,onEdit}:{pla
         <Input.Search aria-label="搜索待排课程" placeholder="课程名称或编码" value={search} onChange={e=>setSearch(e.target.value)} style={{marginBottom:12}}/>
         {!visiblePool.length&&<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={!pool.length?'课程管理中暂无匹配本周期的活动课程，请核对课程年级、专业和上课学期':'当前年级、专业筛选范围内没有课程'}/>}
         <div style={{maxHeight:640,overflowY:'auto'}}>{visiblePool.filter(c=>`${c.name} ${c.code}`.includes(search)).map(course=>{
-          const weeks=duration[course.id]??course.teaching_weeks;
+          const weeks=course.teaching_weeks;
           const item={course_id:course.id,duration:weeks||undefined};
-          return <div key={`${course.id}:${course.cohort}:${course.major}`} draggable={editable&&!busy} onDragStart={e=>drag(e,item)} style={{border:`1px solid ${selected?.course_id===course.id?'#436684':'#e4e1ed'}`,background:'#f8f9fb',borderRadius:6,padding:10,marginBottom:10,cursor:editable?'grab':'default'}}>
-            <Typography.Text strong>{course.name}</Typography.Text><Button size="small" style={{display:'block',marginTop:5,touchAction:'none',cursor:'grab'}} disabled={!editable||busy} aria-label={`拖拽放置 ${course.name}`} onPointerDown={e=>beginPointer(e,item,course.name)} onPointerMove={e=>{if(pointer.current)setGhost({x:e.clientX,y:e.clientY,name:pointer.current.name});}} onPointerUp={endPointer} onPointerCancel={()=>{pointer.current=null;setGhost(undefined);}}>拖拽放置</Button>
+          const schedulable=Boolean(weeks);
+          return <div key={`${course.id}:${course.cohort}:${course.major}`} draggable={editable&&!busy&&schedulable} onDragStart={e=>drag(e,item)} style={{border:`1px solid ${selected?.course_id===course.id?'#436684':'#e4e1ed'}`,background:'#f8f9fb',borderRadius:6,padding:10,marginBottom:10,cursor:editable&&schedulable?'grab':'default'}}>
+            <Typography.Text strong>{course.name}</Typography.Text><Button size="small" style={{display:'block',marginTop:5,touchAction:'none',cursor:'grab'}} disabled={!editable||busy||!schedulable} aria-label={`拖拽放置 ${course.name}`} onPointerDown={e=>beginPointer(e,item,course.name)} onPointerMove={e=>{if(pointer.current)setGhost({x:e.clientX,y:e.clientY,name:pointer.current.name});}} onPointerUp={endPointer} onPointerCancel={()=>{pointer.current=null;setGhost(undefined);}}>拖拽放置</Button>
             {course.major&&<div style={{fontSize:11,color:'#436684',marginTop:4}}>{course.major} · {normalizeCohort(course.cohort)}级 · 第{course.semester}学期</div>}
-            <div style={{fontSize:12,margin:'4px 0'}}>{course.credits}学分 · {course.required_hours}学时 · {course.weekly_hours??'未注明'}节/周</div>
-            <Space wrap><label>占用 <InputNumber aria-label={`${course.name}占用周数`} min={1} max={plan.weeks-1} value={weeks} onChange={v=>setDuration(current=>({...current,[course.id]:v??undefined}))} style={{width:60}} disabled={!editable||busy}/> 周</label><Button size="small" disabled={!editable||busy} onClick={()=>{setSelected(item);message.info('请点击班级行中的起始周');}}>选择放置</Button></Space>
+            <div style={{fontSize:12,margin:'4px 0'}}>{course.credits}学分 · {course.required_hours}学时 · {course.weekly_hours??'未注明'}节/周 · 教学计划 {weeks??'待补录'} 周</div>
+            <Space wrap><Button size="small" disabled={!editable||busy||!schedulable} onClick={()=>{setSelected(item);message.info('请点击班级行中的起始周');}}>选择放置</Button></Space>
+            {!schedulable&&<div style={{fontSize:11,color:'#e5484d',marginTop:4}}>课程库未提供授课周数，请先在课程数据中补齐</div>}
             {course.notes&&<Typography.Paragraph type="secondary" style={{fontSize:11,margin:'5px 0 0'}}>{course.notes}</Typography.Paragraph>}
           </div>;
         })}</div>
