@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, AutoComplete, Button, Card, Empty, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography, message } from 'antd';
-import { InfoCircleOutlined, MinusOutlined, PlusOutlined, MenuFoldOutlined, MenuUnfoldOutlined } from '@ant-design/icons';
+import { Alert, AutoComplete, Button, Card, Empty, Input, InputNumber, Modal, Popconfirm, Select, Space, Spin, Table, Tag, Tooltip, Typography, message } from 'antd';
+import { InfoCircleOutlined, MinusOutlined, PlusOutlined, MenuFoldOutlined, MenuUnfoldOutlined, RobotOutlined } from '@ant-design/icons';
 import { planningApi as api } from '../api/planning';
 import { weekDates } from '../lib/selectionGrid';
 import { examWeeksFor } from '../lib/examWeeks';
@@ -12,6 +12,7 @@ const MIME='application/x-college-stage';
 export default function AdminStagePlanner({plan,classes=[],onChange,onEdit}:{plan:any;classes?:any[];onChange:()=>Promise<void>;onEdit:(task:any)=>void}){
   const [pool,setPool]=useState<any[]>([]),[search,setSearch]=useState(''),[groups,setGroups]=useState<string[]>([]);
   const [schedulePreview,setSchedulePreview]=useState<any>();
+  const [aiOpen,setAiOpen]=useState(false),[aiLoading,setAiLoading]=useState(false),[aiResult,setAiResult]=useState<any>();
   const [newGroup,setNewGroup]=useState(''),[removeGroup,setRemoveGroup]=useState<string>();
   const [selected,setSelected]=useState<DragItem>(),[duration,setDuration]=useState<Record<number,number|undefined>>({}),[busy,setBusy]=useState(false),[error,setError]=useState('');
   const [poolOpen,setPoolOpen]=useState(true);
@@ -53,6 +54,7 @@ export default function AdminStagePlanner({plan,classes=[],onChange,onEdit}:{pla
     finally{setBusy(false);}
   };
   const autoSchedule=async()=>{setBusy(true);try{setSchedulePreview(await api.previewAutoSchedule(plan.id,{algorithm:'genetic'}));}catch(e){message.error(e instanceof Error?e.message:'遗传算法未能生成可行候选');}finally{setBusy(false);}};
+  const aiReview=async()=>{setAiOpen(true);setAiLoading(true);setAiResult(undefined);try{setAiResult(await api.aiReview(plan.id));}catch(e){message.error(e instanceof Error?e.message:'AI 分析失败');}finally{setAiLoading(false);}};
   const applyAutoSchedule=async()=>{if(!schedulePreview)return;setBusy(true);try{const result=await api.applyAutoSchedule(plan.id,schedulePreview.preview_id);setSchedulePreview(undefined);message.success(`已应用遗传算法候选：${result.scheduled}门课程`);await onChange();}catch(e){message.error(e instanceof Error?e.message:'候选已失效或校验未通过，请重新生成');}finally{setBusy(false);}};
   useEffect(()=>{setGroups(groupKey?groupKey.split('|'):[]);},[groupKey]);
   useEffect(()=>{let active=true;void api.coursePool(plan.id).then(data=>{if(active){setPool(data.courses);setError('');}}).catch(e=>{if(active)setError(e instanceof Error?e.message:'课程列表读取失败');});return()=>{active=false;};},[plan.id,plan.revision]);
@@ -123,12 +125,26 @@ export default function AdminStagePlanner({plan,classes=[],onChange,onEdit}:{pla
     {error&&<Alert showIcon type="error" title={error}/>}
     <Space wrap><Button icon={poolOpen?<MenuFoldOutlined/>:<MenuUnfoldOutlined/>} onClick={()=>setPoolOpen(open=>!open)}>{poolOpen?'收起课程池':'待排课程'}</Button>
       {plan.state==='matched'&&<Button type="primary" loading={busy} onClick={()=>void autoSchedule()}>遗传算法生成候选</Button>}
+      <Button icon={<RobotOutlined/>} loading={aiLoading} onClick={()=>void aiReview()}>AI 排课分析</Button>
       <Tooltip title={helpOpen?'收起编排说明':'展开编排说明'}><Button type="text" size="small" aria-label={helpOpen?'收起编排说明':'展开编排说明'} aria-expanded={helpOpen} icon={<InfoCircleOutlined/>} onClick={()=>setHelpOpen(open=>!open)}/></Tooltip>
       <Typography.Text type="secondary">显示范围</Typography.Text>
       <Select aria-label="按年级筛选" value={selectedCohort} onChange={setSelectedCohort} style={{width:150}} options={[{value:'__all__',label:'全部年级'},...cohortOptions.map((cohort:string)=>({value:cohort,label:`${cohort}级`}))]}/>
       <Select aria-label="按专业筛选" value={selectedMajor} onChange={setSelectedMajor} style={{width:190}} options={[{value:'__all__',label:'全部专业'},...majorOptions.map((major:string)=>({value:major,label:major}))]}/>
     </Space>
     {helpOpen&&<Alert showIcon type="info" title={`按班级和${weeks}周编排阶段课程`} description="从课程列表拖到班级对应的起始周，按方案上课周数形成课程块。也可点“选择放置”，再点目标周。拖动课程块可调整周段或班级；点击课程名称维护教师名额。考试周按年级设置（顶部工具栏选择年级后在表头点选周次）。周内节次为可选项，发布前核验周段、地点、教师与教学组冲突。"/>}
+    <Modal title="AI 排课分析" open={aiOpen} onCancel={()=>setAiOpen(false)} footer={<Button onClick={()=>setAiOpen(false)}>关闭</Button>} width={760}>
+      {aiLoading&&<div style={{textAlign:'center',padding:32}}><Spin size="large"/><div style={{marginTop:12,color:'#8c8c8c'}}>正在分析当前周期…</div></div>}
+      {aiResult&&<Space direction="vertical" style={{width:'100%'}} size="middle">
+        <Alert showIcon type={aiResult.source==='llm'?'success':'info'}
+          title={aiResult.source==='llm'?`模型分析 · ${aiResult.model}`:'规则分析'}
+          description={aiResult.reason||'基于当前周期的任务、教师、地点与考试周数据生成。'}/>
+        <Typography.Paragraph style={{whiteSpace:'pre-wrap',lineHeight:1.8,marginBottom:0}}>{aiResult.text}</Typography.Paragraph>
+        {aiResult.issues?.length>0&&<Table size="small" rowKey={(r:any)=>`${r.task_id}-${r.category}-${r.message}`}
+          pagination={{pageSize:6}} dataSource={aiResult.issues} columns={[
+            {title:'课程',dataIndex:'name'},{title:'教学组',dataIndex:'group'},{title:'问题',dataIndex:'message'},
+          ]}/>}
+      </Space>}
+    </Modal>
     <Modal title="遗传算法排课候选" open={!!schedulePreview} onCancel={()=>setSchedulePreview(undefined)} onOk={()=>void applyAutoSchedule()} confirmLoading={busy} okText="校验并应用候选" cancelText="暂不应用" width={820}>
       {schedulePreview&&<Space direction="vertical" style={{width:'100%'}}>
         <Alert type="info" showIcon title={`候选覆盖${schedulePreview.scheduled}门课程 · 软目标评分${schedulePreview.score} · ${schedulePreview.generations}代`} description="教师、班级与教学周段保持不变。该候选在应用时会再次校验学时、考试周、班级/教师/教室冲突、教室容量与类型。候选30分钟后过期。"/>

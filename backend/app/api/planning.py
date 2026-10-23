@@ -19,12 +19,13 @@ from app.services.auth import require_user
 from app.services.authorization import can, check
 from app.services.stage_planning import task_dict, validate_tasks, validate_student_limit, capacity
 from app.services.academic_scope import is_global, plan_term, program_semester, groups_for_cycle, groups_in_cycle
-from app.services.exam_weeks import normalize_exam_weeks, exam_weeks_from_config
+from app.services.exam_weeks import normalize_exam_weeks, exam_weeks_from_config, exam_weeks_for
 from app.services.matching_weights import get_match_weights, weight_items, weights_total
 from app.services.workload import compute_teacher_workload
 from app.services.teacher_course_matching import score_candidate
 from app.services.personal_profile import require_personal_profile,missing_profile_fields,effective_profile
 from app.services.course_catalog import course_catalog_scope
+from app.services.ai_explanation import generate_ai_advice
 
 router = APIRouter(prefix='/api/planning', tags=['教师选课与阶段计划'])
 
@@ -268,6 +269,82 @@ def get_state(plan_id: int, user=Depends(require_user), db: Session=Depends(get_
         'match':{'id':run.id,'maximum':run.payload.get('maximum',weights_total(weights)),'weights':run.payload.get('match_weights',weights),
             'candidates':candidates,'suggestions':[
             s for s in run.payload['suggestions'] if any(t['id']==s['task_id'] and can(user,'review',t) for t in tasks)]} if run else None}
+
+
+def _ai_context(db, plan, tasks):
+    """把周期状态压缩为模型/规则分析需要的结构化上下文。"""
+    teacher_names = {t.id: t.name for t in db.query(Teacher)}
+    stats = {'total': len(tasks), 'placed': 0, 'with_slots': 0, 'with_room': 0, 'locked': 0}
+    issues = []
+    flagged = {}
+
+    def add(task, category, message):
+        issues.append({'task_id': task['id'], 'name': task['name'], 'group': task.get('group', ''),
+                       'category': category, 'level': 'blocking', 'message': message})
+        flagged[task['id']] = task
+
+    for task in tasks:
+        has_span = bool(task.get('start_week') and task.get('end_week'))
+        has_slots = bool(task.get('slots'))
+        has_room = bool(task.get('room_id'))
+        assigned = list(task.get('teacher_ids') or [])
+        locked = bool(task.get('locked') and len(assigned) == task.get('teacher_count'))
+        stats['placed'] += int(has_span)
+        stats['with_slots'] += int(has_slots)
+        stats['with_room'] += int(has_room)
+        stats['locked'] += int(locked)
+
+        if not has_span:
+            add(task, 'missing_weeks', '尚未安排教学周段')
+        else:
+            if task['end_week'] > plan.weeks:
+                add(task, 'span_out_of_range', f"周段 W{task['start_week']}—W{task['end_week']} 超出周期 {plan.weeks} 周")
+            exam = exam_weeks_for(plan, task.get('cohort'), task.get('group'), plan.weeks)
+            blocked = sorted(exam & set(range(task['start_week'], task['end_week'] + 1)))
+            if blocked:
+                add(task, 'exam_week', f"周段进入考试周（第{'、'.join(map(str, blocked))}周）")
+        if not has_slots:
+            add(task, 'missing_slots', '尚未配置周内节次')
+        if not has_room:
+            add(task, 'missing_room', '尚未落实上课地点')
+        if not locked:
+            add(task, 'unassigned', '授课教师尚未审核锁定或人数与名额不符')
+        elif has_span and has_slots:
+            for tid in assigned:
+                reasons, _ = capacity(db, plan, task, tid, profile_for(db, tid),
+                                      assigned_tasks(db, plan, tid, task['id']))
+                if reasons:
+                    add(task, 'capacity', f"教师「{teacher_names.get(tid, tid)}」：{'；'.join(reasons)}")
+
+    groups = (plan.settings or {}).get('groups') or sorted(
+        {task.get('group') for task in tasks if task.get('group')})
+    return {
+        'plan': {'name': plan.name, 'state': plan.state, 'start_date': plan.start_date.isoformat(),
+                 'weeks': plan.weeks, 'group_count': len(groups)},
+        'stats': stats,
+        'issues': issues,
+        'tasks_with_issues': [
+            {'id': task['id'], 'name': task['name'], 'group': task.get('group', ''),
+             'cohort': task.get('cohort', ''), 'start_week': task.get('start_week'),
+             'end_week': task.get('end_week'), 'slots': len(task.get('slots') or []),
+             'room': task.get('room_name') or '',
+             'teachers': [teacher_names.get(tid, str(tid)) for tid in (task.get('teacher_ids') or [])],
+             'required_hours': task.get('required_hours')}
+            for task in flagged.values()
+        ],
+    }
+
+
+@router.post('/plans/{plan_id}/ai-review')
+def ai_review(plan_id: int, user=Depends(require_user), db: Session = Depends(get_db)):
+    """管理员按当前周期状态生成 AI 排课分析；未配置模型密钥时自动使用规则分析。"""
+    check(user, 'admin')
+    plan = get_plan(db, plan_id)
+    result = generate_ai_advice(_ai_context(db, plan, tasks_for(db, plan)))
+    event(db, user, 'ai_review', {'source': result.get('source'), 'model': result.get('model'),
+                                  'issue_count': result.get('issue_count', 0)}, plan.id)
+    db.commit()
+    return {**result, 'plan_id': plan.id, 'plan_state': plan.state}
 
 
 def own_profile_response(db,tid):

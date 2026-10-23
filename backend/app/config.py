@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     # 每天上课节数（默认8节）
     PERIODS_PER_DAY: int = 8
 
+    # AI 排课分析（可选）。未配置 ANTHROPIC_API_KEY 时自动回退到规则分析。
+    ANTHROPIC_API_KEY: str = ""
+    ANTHROPIC_MODEL: str = "claude-opus-5-5"
+    ANTHROPIC_BASE_URL: str = "https://api.anthropic.com"
+    ANTHROPIC_API_VERSION: str = "2026-10-21"
+    AI_TIMEOUT_SECONDS: float = 30.0
+
     # CORS配置
     CORS_ORIGINS: list = ["http://localhost:5173", "http://localhost:3000"]
 

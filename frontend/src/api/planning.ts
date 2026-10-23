@@ -11,6 +11,7 @@ export const planningApi = {
   coursePool: (id:number) => api.get(`/planning/plans/${id}/course-pool`),
   placeCourse: (id:number,data:unknown) => api.put(`/planning/plans/${id}/placement`,data),
   autoSchedule: (id:number) => api.post(`/planning/plans/${id}/auto-schedule`),
+  aiReview: (id:number) => api.post(`/planning/plans/${id}/ai-review`),
   previewAutoSchedule: (id:number,data:{algorithm:'genetic'|'backtracking'}) => api.post(`/planning/plans/${id}/auto-schedule/preview`,data),
   applyAutoSchedule: (id:number,preview_id:number) => api.post(`/planning/plans/${id}/auto-schedule/apply`,{preview_id}),
   unplaceCourse: (id:number,task:number,revision:number) => api.delete(`/planning/plans/${id}/placement/${task}`,{params:{revision}}),

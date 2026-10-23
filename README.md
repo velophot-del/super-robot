@@ -118,6 +118,17 @@ npm run dev -- --host 127.0.0.1 --port 5173 --strictPort
 - 启动自动创建数据库表；默认数据库位置相对于 `backend` 工作目录。
 - 执行后端命令时显式设置 `DEBUG=false`，避免宿主环境中的同名变量导致配置解析失败。
 
+### AI 排课分析（可选）
+
+「课程表编排」页的「AI 排课分析」会基于当前周期的任务、教师、地点与考试周数据生成风险和建议。未配置模型密钥、调用超时或服务异常时，自动回退到规则分析，功能不受影响。
+
+```bash
+export ANTHROPIC_API_KEY="..."
+# 可选：ANTHROPIC_MODEL（默认 claude-opus-5-5）、ANTHROPIC_BASE_URL、AI_TIMEOUT_SECONDS
+```
+
+修改后需重启后端。接口 `POST /api/planning/plans/{id}/ai-review` 仅管理员可用；密钥只保存在服务端，不会返回前端。
+
 ### 登录与授权
 
 首次运行可在 `backend` 目录创建管理员种子账户（交互式输入密码，重复执行不会覆盖已有密码，也不认领同名普通账号）：
