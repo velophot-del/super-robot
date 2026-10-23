@@ -64,8 +64,13 @@ class AIMatchTests(unittest.IsolatedAsyncioTestCase):
         pid, task_id, admin = await self.prepare_match()
         self.save_ai_config()
         text = '{"rankings":[{"task_id":%d,"teacher_ids":[7],"reason":"方向匹配"}]}' % task_id
-        with patch('app.api.planning.call_llm',
-                   return_value={'text': text, 'model': 'deepseek-chat', 'usage': {}}):
+
+        def fake_call(*args, **kwargs):
+            # 模型调用期间不应持有 SQLite 读事务。
+            self.assertFalse(self.db.in_transaction())
+            return {'text': text, 'model': 'deepseek-chat', 'usage': {}}
+
+        with patch('app.api.planning.call_llm', side_effect=fake_call):
             matched = await self.client.post(f'/api/planning/plans/{pid}/match',
                                              headers=admin, params={'use_ai': 'true'})
         self.assertEqual(matched.status_code, 200, matched.text)
@@ -100,4 +105,18 @@ class AIMatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(body['ai_applied'])
         self.assertEqual(body['auto_assigned'], 1)
         self.assertEqual(body['suggestions'][0]['teacher_ids'], [7])
+        self.assertEqual(body['suggestions'][0]['source'], 'rule')
+
+    async def test_malformed_ranking_shape_falls_back_instead_of_500(self):
+        pid, _task_id, admin = await self.prepare_match()
+        self.save_ai_config()
+        with patch('app.api.planning.call_llm',
+                   return_value={'text': '{"rankings": "abc"}', 'model': 'deepseek-chat'}):
+            matched = await self.client.post(f'/api/planning/plans/{pid}/match',
+                                             headers=admin, params={'use_ai': 'true'})
+        self.assertEqual(matched.status_code, 200, matched.text)
+        body = matched.json()
+        self.assertFalse(body['ai_used'])
+        self.assertFalse(body['ai_applied'])
+        self.assertEqual(body['auto_assigned'], 1)
         self.assertEqual(body['suggestions'][0]['source'], 'rule')

@@ -28,6 +28,7 @@ class AIConfigTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(body['configured'])
         self.assertNotIn('sk-test-secret-1234', json.dumps(body, ensure_ascii=False))
         self.assertIn('…', body['masked_key'])
+        self.assertTrue(body['updated_at'].endswith('Z'))
         row = self.db.get(AIConfig, 1)
         self.assertNotEqual(row.api_key_encrypted, 'sk-test-secret-1234')
 
@@ -47,12 +48,45 @@ class AIConfigTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(response.json()['ok'])
         self.assertIn('API Key', response.json()['message'])
         with patch.object(ai_settings, 'call_llm',
-                          return_value={'text': 'OK', 'model': 'deepseek-chat'}):
+                          return_value={'text': 'OK', 'model': 'deepseek-chat'}) as mocked:
             tested = await self.client.post('/api/ai/config/test', headers=headers, json={
                 'provider': 'deepseek', 'base_url': 'https://api.deepseek.com',
                 'model': 'deepseek-chat', 'api_key': 'sk-test'})
         self.assertTrue(tested.json()['ok'], tested.text)
         self.assertEqual(tested.json()['model'], 'deepseek-chat')
+        self.assertEqual(mocked.call_args.kwargs.get('max_tokens'), 512)
+        self.assertEqual(mocked.call_args.kwargs.get('effort'), 'low')
+
+    def test_provider_response_shape_errors_become_llm_error(self):
+        from app.services import ai_config
+
+        class BadResponse:
+            status_code = 200
+            text = ''
+
+            def json(self):
+                return ['not', 'a', 'dict']
+
+        with patch.object(ai_config.httpx, 'post', return_value=BadResponse()):
+            with self.assertRaises(ai_config.LLMError):
+                ai_config.call_llm({'protocol': 'openai', 'base_url': 'https://example.invalid',
+                                    'model': 'm', 'api_key': 'k'}, 'system', 'user')
+
+    def test_openai_list_content_is_joined(self):
+        from app.services import ai_config
+
+        class ListResponse:
+            status_code = 200
+            text = ''
+
+            def json(self):
+                return {'model': 'm', 'choices': [{'message': {'content': [
+                    {'type': 'text', 'text': 'O'}, {'type': 'text', 'text': 'K'}]}}]}
+
+        with patch.object(ai_config.httpx, 'post', return_value=ListResponse()):
+            result = ai_config.call_llm({'protocol': 'openai', 'base_url': 'https://example.invalid',
+                                         'model': 'm', 'api_key': 'k'}, 'system', 'user')
+        self.assertEqual(result['text'], 'OK')
 
     async def test_non_admin_cannot_read_or_write(self):
         denied = User(username='ai_cfg_denied', email='ai_cfg_denied@test.invalid',

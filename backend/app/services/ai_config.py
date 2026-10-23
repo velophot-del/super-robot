@@ -95,17 +95,31 @@ def _status_message(status):
     return f'AI 服务返回 {status}'
 
 
-def call_llm(config, system, user_text, max_tokens=2000, json_mode=False):
+def call_llm(config, system, user_text, max_tokens=2000, json_mode=False, effort='medium'):
     """按服务商协议发起一次非流式调用；失败统一抛出 LLMError。"""
     protocol = config.get('protocol') or protocol_for(config.get('provider', 'custom'))
     try:
         if protocol == 'anthropic':
-            return _call_anthropic(config, system, user_text, max_tokens)
+            return _call_anthropic(config, system, user_text, max_tokens, effort)
         return _call_openai(config, system, user_text, max_tokens, json_mode)
     except httpx.TimeoutException as exc:
         raise LLMError('AI 服务超时') from exc
     except httpx.RequestError as exc:
         raise LLMError('AI 服务连接失败') from exc
+
+
+def _openai_text(content):
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, dict) and part.get('type') in (None, 'text'):
+                text = part.get('text')
+                if isinstance(text, str):
+                    parts.append(text)
+        return ''.join(parts).strip()
+    return ''
 
 
 def _call_openai(config, system, user_text, max_tokens, json_mode):
@@ -133,18 +147,22 @@ def _call_openai(config, system, user_text, max_tokens, json_mode):
         payload = response.json()
     except ValueError as exc:
         raise LLMError('AI 服务返回无法解析') from exc
-    choices = payload.get('choices') or []
-    text = ''
-    if choices:
-        text = (choices[0].get('message') or {}).get('content') or ''
-    text = text.strip()
+    if not isinstance(payload, dict):
+        raise LLMError('AI 服务返回格式不正确')
+    choices = payload.get('choices')
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        raise LLMError('AI 未返回文本')
+    message = choices[0].get('message')
+    text = _openai_text(message.get('content')) if isinstance(message, dict) else ''
     if not text:
         raise LLMError('AI 未返回文本')
-    return {'text': text, 'model': payload.get('model') or config.get('model') or '',
-            'usage': payload.get('usage') or {}}
+    model = payload.get('model')
+    usage = payload.get('usage')
+    return {'text': text, 'model': model if isinstance(model, str) and model else config.get('model') or '',
+            'usage': usage if isinstance(usage, dict) else {}}
 
 
-def _call_anthropic(config, system, user_text, max_tokens):
+def _call_anthropic(config, system, user_text, max_tokens, effort='medium'):
     base = (config.get('base_url') or settings.ANTHROPIC_BASE_URL).rstrip('/')
     if base.endswith('/v1'):
         base = base[:-3]
@@ -153,7 +171,7 @@ def _call_anthropic(config, system, user_text, max_tokens):
         'max_tokens': max_tokens,
         'system': system,
         'messages': [{'role': 'user', 'content': user_text}],
-        'output_config': {'effort': 'medium'},
+        'output_config': {'effort': effort},
         'fallbacks': 'default',
     }
     response = httpx.post(
@@ -171,11 +189,19 @@ def _call_anthropic(config, system, user_text, max_tokens):
         payload = response.json()
     except ValueError as exc:
         raise LLMError('AI 服务返回无法解析') from exc
+    if not isinstance(payload, dict):
+        raise LLMError('AI 服务返回格式不正确')
     if payload.get('stop_reason') == 'refusal':
         raise LLMError('AI 拒绝了本次分析')
-    blocks = payload.get('content') or []
-    text = '\n'.join(block.get('text', '') for block in blocks if block.get('type') == 'text').strip()
+    blocks = payload.get('content')
+    if not isinstance(blocks, list):
+        raise LLMError('AI 未返回文本')
+    text = '\n'.join(block.get('text', '') for block in blocks
+                     if isinstance(block, dict) and block.get('type') == 'text').strip()
     if not text:
         raise LLMError('AI 未返回文本')
-    return {'text': text, 'model': payload.get('model') or settings.ANTHROPIC_MODEL,
-            'usage': payload.get('usage') or {}}
+    model = payload.get('model')
+    usage = payload.get('usage')
+    return {'text': text,
+            'model': model if isinstance(model, str) and model else settings.ANTHROPIC_MODEL,
+            'usage': usage if isinstance(usage, dict) else {}}

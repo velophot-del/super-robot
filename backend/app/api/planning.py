@@ -343,11 +343,13 @@ def ai_review(plan_id: int, user=Depends(require_user), db: Session = Depends(ge
     """管理员按当前周期状态生成 AI 排课分析；未配置模型密钥时自动使用规则分析。"""
     check(user, 'admin')
     plan = get_plan(db, plan_id)
-    result = generate_ai_advice(_ai_context(db, plan, tasks_for(db, plan)), db)
+    plan_state = plan.state
+    context = _ai_context(db, plan, tasks_for(db, plan))
+    result = generate_ai_advice(context, db)
     event(db, user, 'ai_review', {'source': result.get('source'), 'model': result.get('model'),
-                                  'issue_count': result.get('issue_count', 0)}, plan.id)
+                                  'issue_count': result.get('issue_count', 0)}, plan_id)
     db.commit()
-    return {**result, 'plan_id': plan.id, 'plan_state': plan.state}
+    return {**result, 'plan_id': plan_id, 'plan_state': plan_state}
 
 
 def own_profile_response(db,tid):
@@ -727,11 +729,21 @@ def _parse_ai_rankings(text):
         data = json.loads(text[start:end + 1])
     except (TypeError, ValueError) as exc:
         raise ValueError('AI 排序结果不是有效 JSON') from exc
+    if not isinstance(data, dict):
+        raise ValueError('AI 排序结果不是有效 JSON')
+    raw = data.get('rankings')
+    if not isinstance(raw, list):
+        raise ValueError('AI 排序结果格式不正确')
     rankings = {}
-    for item in data.get('rankings') or []:
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        raw_ids = item.get('teacher_ids')
+        if not isinstance(raw_ids, list):
+            continue
         try:
             task_id = int(item.get('task_id'))
-            ids = [int(x) for x in (item.get('teacher_ids') or [])]
+            ids = [int(x) for x in raw_ids]
         except (TypeError, ValueError):
             continue
         if ids:
@@ -783,10 +795,12 @@ def _ai_rank_candidates(db, snapshot):
               '格式：{"rankings":[{"task_id":1,"teacher_ids":[3],"reason":"..."}]}')
     user_text = '以下是任务、候选教师和系统规则权重：\n' + json.dumps(
         {'weights': snapshot['weights'], 'tasks': tasks_payload}, ensure_ascii=False)
+    # 释放查询产生的读事务，避免模型调用期间占用 SQLite 读锁。
+    db.rollback()
     try:
         result = call_llm(config, system, user_text, max_tokens=4000, json_mode=True)
         rankings = _parse_ai_rankings(result.get('text', ''))
-    except (LLMError, ValueError) as exc:
+    except (LLMError, ValueError, TypeError, AttributeError) as exc:
         return {}, {'used': False, 'reason': str(exc) or 'AI 排序失败',
                     'provider': config.get('provider'), 'model': config.get('model')}
     return rankings, {'used': True, 'reason': '', 'provider': config.get('provider'),

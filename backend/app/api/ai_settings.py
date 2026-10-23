@@ -43,6 +43,13 @@ class AITestInput(BaseModel):
     api_key: str = Field('', max_length=500)
 
 
+def _iso_utc(value):
+    if not value:
+        return None
+    text = value.isoformat()
+    return text if value.tzinfo is not None else text + 'Z'
+
+
 def _config_response(db):
     row = db.get(AIConfig, 1)
     effective = resolve_config(db)
@@ -52,7 +59,7 @@ def _config_response(db):
                 'enabled': row.enabled, 'configured': bool(row.api_key_encrypted),
                 'masked_key': mask_key(key), 'source': effective['source'] if effective else 'none',
                 'providers': PROVIDERS, 'updated_by': row.updated_by,
-                'updated_at': row.updated_at.isoformat() if row.updated_at else None}
+                'updated_at': _iso_utc(row.updated_at)}
     env_key = (settings.ANTHROPIC_API_KEY or '').strip()
     if env_key:
         return {'provider': 'anthropic', 'base_url': settings.ANTHROPIC_BASE_URL,
@@ -113,7 +120,7 @@ def test_config(data: AITestInput, user=Depends(require_user), db: Session = Dep
               'base_url': base_url, 'model': model, 'api_key': key}
     start = time.monotonic()
     try:
-        result = call_llm(config, '你是连通性测试助手，只回复 OK。', 'ping', max_tokens=16)
+        result = call_llm(config, '你是连通性测试助手，只回复 OK。', 'ping', max_tokens=512, effort='low')
         return {'ok': True, 'message': '连接成功', 'model': result.get('model') or model,
                 'latency_ms': int((time.monotonic() - start) * 1000)}
     except LLMError as exc:

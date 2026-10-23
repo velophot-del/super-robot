@@ -64,6 +64,9 @@ def generate_ai_advice(context, db=None):
     """生成排课分析；任何失败都回退到规则文本，且不向调用方泄露密钥或原始错误正文。"""
     fallback = rule_based_advice(context)
     config = resolve_config(db)
+    if db is not None:
+        # 释放查询产生的读事务，避免模型调用期间占用 SQLite 读锁。
+        db.rollback()
     if not config or not config.get('api_key'):
         return {**fallback, 'reason': '未配置 AI 服务，已使用规则分析'}
     user_text = '以下是排课周期的结构化数据：\n' + json.dumps(context, ensure_ascii=False)

@@ -79,3 +79,22 @@ class AiReviewEndpointTests(unittest.IsolatedAsyncioTestCase):
             '/api/planning/plans/1/ai-review',
             headers={'Authorization': 'Bearer ' + account_token(denied, self.db)})
         self.assertEqual(denied_response.status_code, 403)
+
+    async def test_ai_review_releases_read_transaction_before_model_call(self):
+        self.db.add(AcademicPlan(id=2, name='AI 周期 2', start_date=date(2027, 3, 8), weeks=20,
+                                 deadline=datetime(2027, 2, 1), state='draft', revision=1,
+                                 settings={'major': '视觉传达设计', 'cohort': '2026', 'semester': 2}))
+        self.db.commit()
+        admin = (await self.client.post('/api/debug/session', json={'role': 'admin'})).json()['access_token']
+
+        def fake_call(*args, **kwargs):
+            self.assertFalse(self.db.in_transaction())
+            return {'text': '【总体判断】模型结果', 'model': 'test-model', 'usage': {}}
+
+        with patch.object(settings, 'ANTHROPIC_API_KEY', 'test-key'), \
+             patch('app.services.ai_explanation.call_llm', side_effect=fake_call):
+            response = await self.client.post('/api/planning/plans/2/ai-review',
+                                              headers={'Authorization': f'Bearer {admin}'})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['source'], 'llm')
+        self.assertEqual(response.json()['text'], '【总体判断】模型结果')
