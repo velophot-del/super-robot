@@ -10,7 +10,6 @@ import ClassesPage from './pages/DataManagement/ClassesPage';
 import TeachersPage from './pages/DataManagement/TeachersPage';
 import CoursesPage from './pages/DataManagement/CoursesPage';
 import ClassroomsPage from './pages/DataManagement/ClassroomsPage';
-import ImportPage from './pages/DataManagement/ImportPage';
 import AdminHistoryPage from './pages/AdminHistoryPage';
 import TeacherMatchPage from './pages/TeacherMatchPage';
 import TeacherTimetablePage from './pages/TeacherTimetablePage';
@@ -92,7 +91,6 @@ export default function App() {
                 <Route path="/data/teachers" element={<TeachersPage />} />
                 <Route path="/data/courses" element={<CoursesPage />} />
                 <Route path="/data/classrooms" element={<ClassroomsPage />} />
-                <Route path="/data/import" element={<ImportPage />} />
                 </Route>
                 <Route path="/timetable" element={<TimetableRoute />} />
                 <Route path="*" element={<Navigate to="/planning" replace />} />

@@ -6,6 +6,7 @@ import {
 } from 'antd';
 import { EyeOutlined } from '@ant-design/icons';
 import DataTable from '../../components/DataTable';
+import { ImportButton } from '../../components/DataImport';
 import { classApi } from '../../api/client';
 import type { ClassCoursesResponse } from '../../types';
 import { planningApi } from '../../api/planning';
@@ -13,6 +14,7 @@ import { planningApi } from '../../api/planning';
 const cohortLabel = (value:string) => /^\d{4}(届|级)?$/.test(value||'') ? `${value.slice(0,4)}级` : '待补录年级';
 
 export default function ClassesPage() {
+  const [tableKey, setTableKey] = useState(0);
   const [courseDrawerOpen, setCourseDrawerOpen] = useState(false);
   const [selectedClass, setSelectedClass] = useState<{ id: number; name: string; grade: string; department?: string } | null>(null);
   const [classCourses, setClassCourses] = useState<ClassCoursesResponse | null>(null);
@@ -54,9 +56,11 @@ export default function ClassesPage() {
   return (
     <>
       <DataTable
+        key={tableKey}
         title="班级管理"
         entityType="classes"
         api={classApi}
+        extraToolbar={<ImportButton entityType="classes" onImported={() => setTableKey(k => k + 1)} />}
         columns={[
           { title: 'ID', dataIndex: 'id', width: 60 },
           { title: '班级名称', dataIndex: 'name', width: 140 },

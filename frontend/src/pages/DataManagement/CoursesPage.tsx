@@ -2,8 +2,8 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import type { FormInstance } from 'antd';
 import { Form, Input, InputNumber, Select, Switch, Space, Button, Alert, Modal, Popconfirm, message, Tabs, Collapse } from 'antd';
-import { useNavigate } from 'react-router-dom';
 import DataTable from '../../components/DataTable';
+import { ImportButton } from '../../components/DataImport';
 import { courseApi, teacherApi } from '../../api/client';
 import { filterCourses, courseFilterOptions, loadAllCourses, currentGradeCohorts, courseCohorts, inGrade } from '../../lib/courseFilters';
 import type { CourseFilters } from '../../lib/courseFilters';
@@ -13,7 +13,6 @@ import { planningApi } from '../../api/planning';
 const GRADE_COHORTS = currentGradeCohorts();
 
 export default function CoursesPage() {
-  const navigate=useNavigate();
   const [teachers,setTeachers]=useState<any[]>([]);
   const [teacherError,setTeacherError]=useState('');
   const [units,setUnits]=useState<any[]>([]);
@@ -111,7 +110,7 @@ export default function CoursesPage() {
         { title: '需实验室', dataIndex: 'requires_lab', width: 80, render: (v: boolean) => v ? '是' : '否' },
       ]}
       formFields={form => <CourseFields form={form} teachers={teachers} teacherLoading={teacherLoading} teacherError={teacherError} units={units} />}
-      extraToolbar={<><Switch checked={includeInactive} checkedChildren="含已移出" unCheckedChildren="仅活动" onChange={value=>{setIncludeInactive(value);refresh();}}/><Switch checked={includePublic} checkedChildren="含公共课" unCheckedChildren="隐藏公共课" onChange={value=>{setIncludePublic(value);refresh();}}/><Button onClick={()=>navigate('/data/import?entity=courses')}>批量导入</Button><Button onClick={()=>setUnitOpen(true)}>开课单位</Button></>}
+      extraToolbar={<><Switch checked={includeInactive} checkedChildren="含已移出" unCheckedChildren="仅活动" onChange={value=>{setIncludeInactive(value);refresh();}}/><Switch checked={includePublic} checkedChildren="含公共课" unCheckedChildren="隐藏公共课" onChange={value=>{setIncludePublic(value);refresh();}}/><ImportButton entityType="courses" onImported={refresh} label="批量导入"/><Button onClick={()=>setUnitOpen(true)}>开课单位</Button></>}
       extraRowActions={record=>record.is_active===false?<Button type="link" size="small" onClick={async()=>{try{await courseApi.update(record.id,{is_active:true});message.success('课程已恢复到活动课程库');refresh();}catch(e){message.error(e instanceof Error?e.message:'恢复失败');}}}>恢复</Button>:null}
       bulkActions={(rows,clearSelection)=><Space wrap><span>已选 {rows.length} 门</span><Button onClick={()=>{setSelectedRows(rows);bulkForm.resetFields();setBulkOpen(true);}}>批量修改</Button><Popconfirm title={`将${rows.length}门课程移出活动课程库？历史课表保留，可在课程表中恢复。`} onConfirm={async()=>{setBulkBusy(true);try{await courseApi.bulkRemove(rows.map(row=>row.id));message.success(`已移出${rows.length}门课程`);clearSelection();setSelectedRows([]);refresh();}catch(e){message.error(e instanceof Error?e.message:'批量移出失败');}finally{setBulkBusy(false);}}} okText="移出课程库" cancelText="取消"><Button danger loading={bulkBusy}>批量移出</Button></Popconfirm></Space>}
     />

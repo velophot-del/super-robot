@@ -7,12 +7,14 @@ import {
 } from 'antd';
 import { EyeOutlined, SettingOutlined } from '@ant-design/icons';
 import DataTable from '../../components/DataTable';
+import { ImportButton } from '../../components/DataImport';
 import { teacherApi } from '../../api/client';
 import type { TeacherCoursesResponse, TeacherCourseInfo, TeacherCourseAffiliations } from '../../types';
 
 const { Text } = Typography;
 
 export default function TeachersPage() {
+  const [tableKey, setTableKey] = useState(0);
   // ---- 查看已排课程 ----
   const [courseDrawerOpen, setCourseDrawerOpen] = useState(false);
   const [selectedTeacher, setSelectedTeacher] = useState<{ id: number; name: string; department?: string; title?: string } | null>(null);
@@ -76,9 +78,11 @@ export default function TeachersPage() {
   return (
     <>
       <DataTable
+        key={tableKey}
         title="教师管理"
         entityType="teachers"
         api={teacherApi}
+        extraToolbar={<ImportButton entityType="teachers" onImported={() => setTableKey(k => k + 1)} />}
         columns={[
           { title: 'ID', dataIndex: 'id', width: 60 },
           { title: '姓名', dataIndex: 'name', width: 90 },

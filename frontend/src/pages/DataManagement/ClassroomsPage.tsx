@@ -1,14 +1,19 @@
 // 教室管理页面
+import { useState } from 'react';
 import { Form, Input, InputNumber, Select, Switch } from 'antd';
 import DataTable from '../../components/DataTable';
+import { ImportButton } from '../../components/DataImport';
 import { classroomApi } from '../../api/client';
 
 export default function ClassroomsPage() {
+  const [tableKey, setTableKey] = useState(0);
   return (
     <DataTable
+      key={tableKey}
       title="教室管理"
       entityType="classrooms"
       api={classroomApi}
+      extraToolbar={<ImportButton entityType="classrooms" onImported={() => setTableKey(k => k + 1)} />}
       columns={[
         { title: 'ID', dataIndex: 'id', width: 60 },
         { title: '教室名称', dataIndex: 'name', width: 130 },

@@ -8,7 +8,6 @@ import {
   BookOutlined,
   BankOutlined,
   ScheduleOutlined,
-  ImportOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   ThunderboltOutlined,
@@ -31,7 +30,6 @@ const dataMenu = [
       { key: '/data/teachers', icon: <UserOutlined />, label: '教师管理' },
       { key: '/data/courses', icon: <BookOutlined />, label: '课程管理' },
       { key: '/data/classrooms', icon: <BankOutlined />, label: '教室管理' },
-      { key: '/data/import', icon: <ImportOutlined />, label: '数据导入' },
     ],
   },
 ];
