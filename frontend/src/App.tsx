@@ -10,6 +10,10 @@ import ClassesPage from './pages/DataManagement/ClassesPage';
 import TeachersPage from './pages/DataManagement/TeachersPage';
 import CoursesPage from './pages/DataManagement/CoursesPage';
 import ClassroomsPage from './pages/DataManagement/ClassroomsPage';
+import OfferingUnitsPage from './pages/DataManagement/OfferingUnitsPage';
+import DataCheckPage from './pages/DataManagement/DataCheckPage';
+import CycleRulesPage from './pages/DataManagement/CycleRulesPage';
+import ProgramsGradesPage from './pages/DataManagement/ProgramsGradesPage';
 import AISettingsPage from './pages/AISettingsPage';
 import DataDownloadPage from './pages/DataDownloadPage';
 import AdminHistoryPage from './pages/AdminHistoryPage';
@@ -93,6 +97,10 @@ export default function App() {
                 <Route path="/data/teachers" element={<TeachersPage />} />
                 <Route path="/data/courses" element={<CoursesPage />} />
                 <Route path="/data/classrooms" element={<ClassroomsPage />} />
+                <Route path="/data/units" element={<OfferingUnitsPage />} />
+                <Route path="/data/check" element={<DataCheckPage />} />
+                <Route path="/data/cycle-rules" element={<CycleRulesPage />} />
+                <Route path="/data/programs-grades" element={<ProgramsGradesPage />} />
                 <Route path="/data/download" element={<DataDownloadPage />} />
                 <Route path="/settings/ai" element={<AISettingsPage />} />
                 </Route>

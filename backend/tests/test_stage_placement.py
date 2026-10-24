@@ -10,6 +10,34 @@ class StagePlacementTests(unittest.IsolatedAsyncioTestCase):
     asyncSetUp=test_debug_mode.DebugModeTests.asyncSetUp
     asyncTearDown=test_debug_mode.DebugModeTests.asyncTearDown
 
+    async def test_identical_import_rows_share_one_course_but_distinct_hours_remain(self):
+        from app.services.course_catalog import courses_for_group
+        group = ClassInfo(name='A', grade='2026', department='Design', student_count=30)
+        self.db.add(group)
+        for code, hours in [('A', 54), ('B', 54), ('C', 72)]:
+            self.db.add(Course(name='UI', course_code=code, semester=4, cohort='2026',
+                               department='Design', total_hours=hours, teaching_weeks=4))
+        self.db.commit()
+        rows = courses_for_group(self.db, group, 4)
+        self.assertEqual([row.course_code for row in rows], ['A', 'C'])
+
+    async def test_pool_merges_cohort_aliases_and_keeps_all_classes(self):
+        from app.services.course_catalog import course_pool_rows
+        course = Course(id=1, name='Intro', course_code='A', total_hours=8, teaching_weeks=1)
+        groups = [ClassInfo(name=name, grade=grade, department='Design', student_count=30)
+                  for name, grade in [('A', '2026'), ('B', '2026届'), ('C', '2026级')]]
+        rows = course_pool_rows([{'class': g, 'semester': 1, 'courses': [course]} for g in groups])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['cohort'], '2026')
+        self.assertEqual(rows[0]['groups'], ['A', 'B', 'C'])
+
+    async def test_exam_week_scope_normalizes_cohort_labels_across_majors(self):
+        from app.services.exam_weeks import exam_weeks_for, normalize_exam_weeks
+        settings={'weeks':20,'exam_weeks':{'2024':[6],'2024届':[5]}}
+        self.assertEqual(normalize_exam_weeks(settings['exam_weeks'],20),{'2024':[5,6]})
+        self.assertEqual(exam_weeks_for(settings,'2024级','视觉班',20),{5,6})
+        self.assertEqual(exam_weeks_for(settings,'2024','包装班',20),{5,6})
+
     async def test_drop_persists_span_moves_and_rejects_exam_overflow_or_stale(self):
         h={'Authorization':'Bearer '+(await self.client.post('/api/debug/session',json={'role':'admin'})).json()['access_token']}
         self.db.add_all([ClassInfo(name=name,grade='2026',department='Design',student_count=30) for name in ('A','B')])
@@ -36,7 +64,7 @@ class StagePlacementTests(unittest.IsolatedAsyncioTestCase):
         self.db.add(ClassInfo(name='A', grade='2026', department='Design', student_count=30))
         self.db.add(Course(name='Typography', course_code='A', credits=4, total_hours=64,
                            semester=1, cohort='2026', department='Design', teaching_weeks=5,
-                           semester_sessions=16, weekly_sessions=2, hours_per_session=2))
+                           weekdays=[1, 3]))
         self.db.add(AcademicPlan(id=1, name='Term', start_date=date(2027, 9, 6), weeks=20,
                                  deadline=datetime(2027, 8, 1), state='draft', revision=1,
                                  settings={'major': 'Design', 'cohort': '2026', 'semester': 1,
@@ -56,9 +84,9 @@ class StagePlacementTests(unittest.IsolatedAsyncioTestCase):
         h = {'Authorization': 'Bearer ' + (await self.client.post(
             '/api/debug/session', json={'role': 'admin'})).json()['access_token']}
         self.db.add(ClassInfo(name='A', grade='2026', department='Design', student_count=30))
-        self.db.add(Course(name='Typography', course_code='A', credits=4, total_hours=64,
+        self.db.add(Course(name='Typography', course_code='A', credits=4, total_hours=32,
                            semester=1, cohort='2026', department='Design', teaching_weeks=None,
-                           semester_sessions=16, weekly_sessions=2, hours_per_session=2))
+                           weekdays=[1, 3]))
         self.db.add(AcademicPlan(id=1, name='Term', start_date=date(2027, 9, 6), weeks=20,
                                  deadline=datetime(2027, 8, 1), state='draft', revision=1,
                                  settings={'major': 'Design', 'cohort': '2026', 'semester': 1,
@@ -101,3 +129,44 @@ class StagePlacementTests(unittest.IsolatedAsyncioTestCase):
         self.db.add_all([PeriodSlot(task_id=1,day=1,start=1,count=4,phase='normal'),PeriodSlot(task_id=1,day=1,start=1,count=2,phase='tail')]);self.db.commit()
         r=await self.client.put('/api/planning/plans/1/placement',headers=h,json={'revision':1,'task_id':1,'group':'G','start_week':5})
         self.assertEqual(r.status_code,200,r.text);self.assertEqual(r.json()['task']['tail_weeks'],1)
+
+    async def test_ai_autofill_places_catalog_courses_in_draft_and_preserves_manual_spans(self):
+        from app.models.planning import TeachingTask
+        h={'Authorization':'Bearer '+(await self.client.post('/api/debug/session',json={'role':'admin'})).json()['access_token']}
+        self.db.add(ClassInfo(name='G',grade='2026',department='视觉传达设计',student_count=30))
+        self.db.add_all([
+            Course(name='版式设计',course_code='C1',credits=4,total_hours=48,semester=1,cohort='2026',
+                department='视觉传达设计',teaching_weeks=3),
+            Course(name='文字设计',course_code='C2',credits=4,total_hours=48,semester=1,cohort='2026',
+                department='视觉传达设计',teaching_weeks=3),
+        ])
+        plan=AcademicPlan(id=71,name='AI空表填充',start_date=date(2026,9,6),weeks=8,
+            deadline=datetime(2027,8,1),state='draft',revision=1,
+            settings={'groups':['G'],'semester':1,'major':'视觉传达设计','cohort':'2026','exam_weeks':{'2026':[4],'*':[]}})
+        self.db.add(plan);self.db.flush()
+        self.db.add(TeachingTask(id=710,plan_id=71,payload={'name':'人工安排','code':'M','group':'G','class_name':'G',
+            'start_week':1,'end_week':2,'tail_weeks':0,'required_hours':32,'slots':[],'source':{},'cohort':'2026'}))
+        self.db.commit()
+        response=await self.client.post('/api/planning/plans/71/auto-fill/ai',headers=h,json={'revision':1})
+        self.assertEqual(response.status_code,200,response.text)
+        body=response.json()
+        self.assertEqual(body['filled'],2)
+        self.assertEqual(body['source'],'rules')
+        tasks=self.db.query(TeachingTask).filter_by(plan_id=71).all()
+        self.assertEqual(len(tasks),3)
+        self.assertEqual(self.db.get(TeachingTask,710).payload['start_week'],1)
+        generated=[task.payload for task in tasks if task.id!=710]
+        self.assertEqual({task['start_week'] for task in generated},{1,5})
+        self.assertTrue(all(task['end_week']<4 or task['start_week']>4 for task in generated))
+        self.assertTrue(all(not task.get('slots') for task in generated))
+
+    async def test_ai_autofill_reports_courses_without_weeks(self):
+        h={'Authorization':'Bearer '+(await self.client.post('/api/debug/session',json={'role':'admin'})).json()['access_token']}
+        self.db.add(ClassInfo(name='G',grade='2026',department='Design',student_count=30))
+        self.db.add(Course(name='Too long',course_code='NW',credits=2,total_hours=500,semester=1,cohort='2026',department='Design',teaching_weeks=9))
+        self.db.add(AcademicPlan(id=72,name='AI missing metadata',start_date=date(2026,9,6),weeks=8,
+            deadline=datetime(2027,8,1),state='draft',revision=1,settings={'groups':['G'],'semester':1,'major':'Design','cohort':'2026'}));self.db.commit()
+        response=await self.client.post('/api/planning/plans/72/auto-fill/ai',headers=h,json={'revision':1})
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual(response.json()['filled'],0)
+        self.assertIn('周段不足',response.json()['unplaced'][0]['reason'])

@@ -15,6 +15,20 @@ export function normalizeCohort(value:unknown):string{
   return year||text;
 }
 
+export function stageCohorts(plan:any,classes:{name:string;grade?:string;is_active?:boolean}[]=[]):string[]{
+  const taskGroups=new Set<string>((plan?.tasks||[]).map((task:any)=>task.group).filter(Boolean));
+  const cycleGroups=new Set<string>(plan?.groups?.length?plan.groups:taskGroups);
+  const scopedClasses=classes.filter(row=>row.is_active!==false&&(!cycleGroups.size||cycleGroups.has(row.name)));
+  const saved=Object.keys(plan?.exam_weeks||{}).filter(key=>/^\d{2,4}(?:级|届)?$/.test(key));
+  const result=[...new Set<string>([
+    ...scopedClasses.map(row=>normalizeCohort(row.grade)),
+    ...(plan?.tasks||[]).map((task:any)=>normalizeCohort(task.cohort)),
+    ...saved.map(normalizeCohort),
+    normalizeCohort(plan?.cohort),
+  ].filter(Boolean))].sort();
+  return result.length?result:['*'];
+}
+
 export function gradeLabel(value:unknown):string{
   const grade=normalizeCohort(value);
   return grade?`${grade}级`:'';
@@ -43,7 +57,8 @@ export function stageTaskEditAction<T>(task:T,onEdit:(task:T)=>void):()=>void{
 }
 
 export function stageRoomLabel(value:unknown):string{
-  return String(value??'').trim()||'未分配';
+  const address=String(value??'').trim();
+  return address?`上课地点：${address}`:'未分配教室';
 }
 
 export function stageClassScope(group:string,classes:{name:string;grade?:string;department?:string}[],tasks:{group:string;cohort?:string;major?:string;department?:string}[]):{cohort:string;major:string}{

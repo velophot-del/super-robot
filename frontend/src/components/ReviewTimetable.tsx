@@ -31,6 +31,8 @@ export default function ReviewTimetable({ plan, tasks, match, busy, canAssign, r
     groups.get(key)!.tasks.push(task);
   }
   const rows = [...groups.entries()].sort(([a], [b]) => a.localeCompare(b, 'zh-CN'));
+  const cohortStart=(cohort:string)=>plan.cohort_calendar_rules?.[String(cohort||'').replace(/(?:级|届)$/,'')]?.start_date||plan.start_date;
+  const startDates=new Set(rows.map(([,group])=>cohortStart(group.cohort)));
   const candidatesFor = (task: any) => (match?.candidates || []).filter((candidate: any) => candidate.task_id === task.id);
 
   useEffect(() => { if (editing) setValue(editing.teacher_ids || []); }, [editing]);
@@ -68,7 +70,7 @@ export default function ReviewTimetable({ plan, tasks, match, busy, canAssign, r
         <thead><tr style={{ background: '#f3f4f6' }}>
           <th style={{ border: '1px solid #d9d9e3', padding: 8 }}>专业 / 年级 / 教学组</th>
           {Array.from({ length: weeks }, (_, index) => <th key={index} style={{ border: '1px solid #d9d9e3', padding: '5px 2px', fontSize: 12 }}>
-            第{index + 1}周<div style={{ fontWeight: 400, fontSize: 12 }}>{weekDates(plan.start_date, index + 1)}</div>
+            第{index + 1}周<div style={{ fontWeight: 400, fontSize: 12 }}>{startDates.size===1?weekDates([...startDates][0],index+1):'各年级分别设置'}</div>
           </th>)}
         </tr></thead>
         <tbody>{rows.map(([key, group]) => {
@@ -78,6 +80,7 @@ export default function ReviewTimetable({ plan, tasks, match, busy, canAssign, r
             <th style={{ border: '1px solid #d9d9e3', padding: 8, textAlign: 'left', verticalAlign: 'top' }}>
               <div>{group.major}</div>
               <Typography.Text type="secondary">{group.cohort ? `${group.cohort}级 · ` : ''}{group.group}</Typography.Text>
+              <div style={{fontSize:11,color:'#64748d'}}>第1教学周周一 {cohortStart(group.cohort)}</div>
             </th>
             <td colSpan={weeks} style={{ border: '1px solid #d9d9e3', padding: 0 }}>
               <div style={{ position: 'relative', height }}>

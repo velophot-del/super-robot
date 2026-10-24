@@ -1,5 +1,6 @@
 """排课管理与操作API"""
 import json
+import math
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -83,15 +84,28 @@ def generate_schedule(request: ScheduleRequest, db: Session = Depends(get_db)):
     if not teachers or not classes or not classrooms:
         raise HTTPException(status_code=400, detail="请先完善基础数据（课程、教师、班级、教室）")
 
-    # 转换为字典
-    course_dicts = [
-        {"id": c.id, "name": c.name, "course_code": c.course_code,
-         "course_type": c.course_type, "weekly_sessions": c.weekly_sessions,
-         "semester_sessions": c.semester_sessions, "hours_per_session": c.hours_per_session,
-         "requires_consecutive": c.requires_consecutive, "requires_lab": c.requires_lab,
-         "priority": c.priority, "department": c.department}
-        for c in courses
-    ]
+    # 旧版引擎仍使用次数/课时字段；按总学时、授课周数和每周上课日推导。
+    def legacy_course(c):
+        days = []
+        for value in c.weekdays or []:
+            try:
+                day = int(value)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= day <= 7:
+                days.append(day)
+        weekly_sessions = max(1, len(days) or 1)
+        hours_per_session = 2
+        total = c.total_hours or 0
+        semester_sessions = (max(weekly_sessions, math.ceil(total / hours_per_session))
+                             if total else max(weekly_sessions, (c.teaching_weeks or 16) * weekly_sessions))
+        return {"id": c.id, "name": c.name, "course_code": c.course_code,
+                "course_type": c.course_type, "weekly_sessions": weekly_sessions,
+                "semester_sessions": semester_sessions, "hours_per_session": hours_per_session,
+                "requires_consecutive": c.requires_consecutive, "requires_lab": c.requires_lab,
+                "priority": c.priority, "department": c.department}
+
+    course_dicts = [legacy_course(c) for c in courses]
     teacher_dicts = [
         {"id": t.id, "name": t.name, "department": t.department,
          "max_weekly_hours": t.max_weekly_hours,

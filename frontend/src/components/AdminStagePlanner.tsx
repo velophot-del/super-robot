@@ -5,6 +5,7 @@ import { planningApi as api } from '../api/planning';
 import { weekDates } from '../lib/selectionGrid';
 import { examWeeksFor } from '../lib/examWeeks';
 import { matchesStageScope, normalizeCohort, stageClassScope, stageLanes, stageRowMetrics, stageTaskEditAction, stageRoomLabel,dropWeek } from '../lib/adminStageGrid';
+import { weekdayLabel } from '../lib/weekdays';
 
 type DragItem={course_id?:number;task_id?:number;duration?:number};
 const MIME='application/x-college-stage';
@@ -12,7 +13,9 @@ const MIME='application/x-college-stage';
 export default function AdminStagePlanner({plan,classes=[],onChange,onEdit}:{plan:any;classes?:any[];onChange:()=>Promise<void>;onEdit:(task:any)=>void}){
   const [pool,setPool]=useState<any[]>([]),[search,setSearch]=useState(''),[groups,setGroups]=useState<string[]>([]);
   const [schedulePreview,setSchedulePreview]=useState<any>();
+  const [previewMode,setPreviewMode]=useState<'ai-draft'|'genetic'>('genetic');
   const [aiOpen,setAiOpen]=useState(false),[aiLoading,setAiLoading]=useState(false),[aiResult,setAiResult]=useState<any>();
+  const [fillResult,setFillResult]=useState<any>();
   const [newGroup,setNewGroup]=useState(''),[removeGroup,setRemoveGroup]=useState<string>();
   const [selected,setSelected]=useState<DragItem>(),[busy,setBusy]=useState(false),[error,setError]=useState('');
   const [poolOpen,setPoolOpen]=useState(true);
@@ -21,41 +24,18 @@ export default function AdminStagePlanner({plan,classes=[],onChange,onEdit}:{pla
   const [ghost,setGhost]=useState<{x:number;y:number;name:string}>();
   const weeks=Number(plan.weeks)||20;
   const cellWidth=100/weeks;
-  const cohorts=[...new Set<string>([
-    ...(plan.tasks||[]).map((task:any)=>task.cohort).filter(Boolean),
-    ...(plan.exam_weeks?Object.keys(plan.exam_weeks):[]),
-    plan.cohort,
-  ].filter(Boolean))];
-  if(!cohorts.length)cohorts.push('*');
-  const cohortKey=cohorts.join('|');
-  const defaultExamDraft=()=>Object.fromEntries(cohorts.map((cohort:string)=>{
-    if(plan.exam_weeks===undefined||plan.exam_weeks===null)return [cohort,[weeks]];
-    if(Object.keys(plan.exam_weeks).length===0)return [cohort,[]];
-    if(Object.prototype.hasOwnProperty.call(plan.exam_weeks,cohort))return [cohort,plan.exam_weeks[cohort]||[]];
-    if(Object.prototype.hasOwnProperty.call(plan.exam_weeks,'*'))return [cohort,plan.exam_weeks['*']||[]];
-    return [cohort,[weeks]];
-  }));
-  const [examDraft,setExamDraft]=useState<Record<string,number[]>>(()=>defaultExamDraft());
-  useEffect(()=>{setExamDraft(defaultExamDraft());},[plan.id,plan.revision,weeks,cohortKey,JSON.stringify(plan.exam_weeks||{})]);
-  const groupExam=(group:string)=>examWeeksFor(plan,(plan.tasks||[]).find((task:any)=>task.group===group)?.cohort,group,weeks);
+  const groupCohort=(group:string)=>normalizeCohort((plan.tasks||[]).find((task:any)=>task.group===group)?.cohort||classes.find((row:any)=>row.name===group)?.grade||plan.cohort);
+  const groupRule=(group:string)=>plan.cohort_calendar_rules?.[groupCohort(group)];
+  const groupExam=(group:string)=>groupRule(group)?new Set<number>(groupRule(group).exam_weeks||[]):examWeeksFor(plan,groupCohort(group),group,weeks);
+  const groupWeeks=(group:string)=>Number(groupRule(group)?.weeks)||weeks;
   const editable=plan.state==='draft';
   const canEditGroups=plan.state!=='published';
   const groupKey=(plan.groups?.length?plan.groups:[...new Set<string>((plan.tasks||[]).map((t:any)=>t.group))]).join('|');
-  const [examCohort,setExamCohort]=useState<string>(()=>cohorts[0]||'*');
-  useEffect(()=>{setExamCohort(c=>cohorts.includes(c)?c:(cohorts[0]||'*'));},[cohortKey]);
-  const toggleExamWeek=(week:number)=>{
-    if(!editable)return;
-    setExamDraft(draft=>{const cur=new Set(draft[examCohort]||[]);if(cur.has(week))cur.delete(week);else cur.add(week);return {...draft,[examCohort]:[...cur].sort((a,b)=>a-b)};});
-  };
-  const saveExam=async()=>{
-    setBusy(true);
-    try{await api.saveExamWeeks(plan.id,{exam_weeks:examDraft});message.success('考试周已保存');await onChange();}
-    catch(e){message.error(e instanceof Error?e.message:'考试周保存失败');}
-    finally{setBusy(false);}
-  };
-  const autoSchedule=async()=>{setBusy(true);try{setSchedulePreview(await api.previewAutoSchedule(plan.id,{algorithm:'genetic'}));}catch(e){message.error(e instanceof Error?e.message:'遗传算法未能生成可行候选');}finally{setBusy(false);}};
+  const autoSchedule=async()=>{setPreviewMode('genetic');setBusy(true);try{setSchedulePreview(await api.previewAutoSchedule(plan.id,{algorithm:'genetic'}));}catch(e){message.error(e instanceof Error?e.message:'遗传算法未能生成可行候选');}finally{setBusy(false);}};
+  const aiDraft=async()=>{setBusy(true);try{const result:any=await api.generateAiDraft(plan.id);message.success(`一键AI排课完成：已安排${result.scheduled}门课程（${result.draft_source==='llm'?`AI排序 · ${result.draft_model||'模型'}`:'规则排序兜底'}），可继续人工微调`);await onChange();}catch(e){message.error(e instanceof Error?e.message:'AI 课表初稿生成失败；请检查教师锁定、教学周段、学时和教室条件');}finally{setBusy(false);}};
+  const aiAutofill=async()=>{setBusy(true);try{const result:any=await api.aiAutofill(plan.id,plan.revision);setFillResult(result);await onChange();}catch(e){message.error(e instanceof Error?e.message:'AI 自动填充失败，请核对周期版本与课程信息');}finally{setBusy(false);}};
   const aiReview=async()=>{setAiOpen(true);setAiLoading(true);setAiResult(undefined);try{setAiResult(await api.aiReview(plan.id));}catch(e){message.error(e instanceof Error?e.message:'AI 分析失败');}finally{setAiLoading(false);}};
-  const applyAutoSchedule=async()=>{if(!schedulePreview)return;setBusy(true);try{const result=await api.applyAutoSchedule(plan.id,schedulePreview.preview_id);setSchedulePreview(undefined);message.success(`已应用遗传算法候选：${result.scheduled}门课程`);await onChange();}catch(e){message.error(e instanceof Error?e.message:'候选已失效或校验未通过，请重新生成');}finally{setBusy(false);}};
+  const applyAutoSchedule=async()=>{if(!schedulePreview)return;setBusy(true);try{const result=await api.applyAutoSchedule(plan.id,schedulePreview.preview_id);setSchedulePreview(undefined);message.success(`已应用${previewMode==='ai-draft'?'AI课表初稿':'遗传算法候选'}：${result.scheduled}门课程`);await onChange();}catch(e){message.error(e instanceof Error?e.message:'候选已失效或校验未通过，请重新生成');}finally{setBusy(false);}};
   useEffect(()=>{setGroups(groupKey?groupKey.split('|'):[]);},[groupKey]);
   useEffect(()=>{let active=true;void api.coursePool(plan.id).then(data=>{if(active){setPool(data.courses);setError('');}}).catch(e=>{if(active)setError(e instanceof Error?e.message:'课程列表读取失败');});return()=>{active=false;};},[plan.id,plan.revision]);
   const action=async(fn:()=>Promise<unknown>)=>{setBusy(true);try{await fn();await onChange();message.success('课表已保存');}catch(e){message.error(e instanceof Error?e.message:'操作失败，请刷新核对');}finally{setBusy(false);}};
@@ -113,7 +93,7 @@ export default function AdminStagePlanner({plan,classes=[],onChange,onEdit}:{pla
   ].filter(Boolean))].sort();
   const visibleGroups=configuredGroups.filter((group:string)=>matchesStageScope(groupScope(group),selectedCohort,selectedMajor));
   const visiblePool=pool.filter((course:any)=>matchesStageScope({cohort:normalizeCohort(course.cohort),major:course.major},selectedCohort,selectedMajor))
-    .filter((course,index,rows)=>rows.findIndex(other=>other.id===course.id&&other.cohort===course.cohort&&other.major===course.major)===index);
+    .filter((course,index,rows)=>rows.findIndex(other=>other.id===course.id&&normalizeCohort(other.cohort)===normalizeCohort(course.cohort)&&other.major===course.major)===index);
   const visibleTasks=(plan.tasks||[]).filter((task:any)=>{
     const fallback=groupScope(task.group);
     return matchesStageScope({cohort:normalizeCohort(task.cohort)||fallback.cohort,major:task.major||task.department||fallback.major},selectedCohort,selectedMajor);
@@ -124,14 +104,15 @@ export default function AdminStagePlanner({plan,classes=[],onChange,onEdit}:{pla
     {ghost&&<div style={{position:'fixed',left:ghost.x+14,top:ghost.y+14,pointerEvents:'none',zIndex:2000,background:'#436684',color:'white',padding:'8px 12px',borderRadius:6}}>{ghost.name}</div>}
     {error&&<Alert showIcon type="error" title={error}/>}
     <Space wrap><Button icon={poolOpen?<MenuFoldOutlined/>:<MenuUnfoldOutlined/>} onClick={()=>setPoolOpen(open=>!open)}>{poolOpen?'收起课程池':'待排课程'}</Button>
-      {plan.state==='matched'&&<Button type="primary" loading={busy} onClick={()=>void autoSchedule()}>遗传算法生成候选</Button>}
-      <Button icon={<RobotOutlined/>} loading={aiLoading} onClick={()=>void aiReview()}>AI 排课分析</Button>
+      {editable&&<Button type="primary" icon={<RobotOutlined/>} loading={busy} onClick={()=>void aiAutofill()}>AI 自动填充课程</Button>}
+      {plan.state==='matched'&&<><Button type="primary" icon={<RobotOutlined/>} loading={busy} onClick={()=>void aiDraft()}>生成节次教室初稿</Button><Button loading={busy} onClick={()=>void autoSchedule()}>预览遗传算法候选</Button></>}
+      <Button icon={<RobotOutlined/>} loading={aiLoading} onClick={()=>void aiReview()}>AI 周期分析</Button>
       <Tooltip title={helpOpen?'收起编排说明':'展开编排说明'}><Button type="text" size="small" aria-label={helpOpen?'收起编排说明':'展开编排说明'} aria-expanded={helpOpen} icon={<InfoCircleOutlined/>} onClick={()=>setHelpOpen(open=>!open)}/></Tooltip>
       <Typography.Text type="secondary">显示范围</Typography.Text>
       <Select aria-label="按年级筛选" value={selectedCohort} onChange={setSelectedCohort} style={{width:150}} options={[{value:'__all__',label:'全部年级'},...cohortOptions.map((cohort:string)=>({value:cohort,label:`${cohort}级`}))]}/>
       <Select aria-label="按专业筛选" value={selectedMajor} onChange={setSelectedMajor} style={{width:190}} options={[{value:'__all__',label:'全部专业'},...majorOptions.map((major:string)=>({value:major,label:major}))]}/>
     </Space>
-    {helpOpen&&<Alert showIcon type="info" title={`按班级和${weeks}周编排阶段课程`} description="从课程列表拖到班级对应的起始周，按方案上课周数形成课程块。也可点“选择放置”，再点目标周。拖动课程块可调整周段或班级；点击课程名称维护教师名额。考试周按年级设置（顶部工具栏选择年级后在表头点选周次）。周内节次为可选项，发布前核验周段、地点、教师与教学组冲突。"/>}
+    {helpOpen&&<Alert showIcon type="info" title={`按班级和${weeks}周编排阶段课程`} description="从课程列表拖到班级对应的起始周，按方案上课周数形成课程块。也可点“选择放置”，再点目标周。拖动课程块可调整周段或班级；点击课程名称维护教师名额。考试周、授课周数和课程开始日期在“数据管理→开课周期与规则”按年级统一设置。周内节次为可选项，发布前核验周段、地点、教师与教学组冲突。"/>}
     <Modal title="AI 排课分析" open={aiOpen} onCancel={()=>setAiOpen(false)} footer={<Button onClick={()=>setAiOpen(false)}>关闭</Button>} width={760}>
       {aiLoading&&<div style={{textAlign:'center',padding:32}}><Spin size="large"/><div style={{marginTop:12,color:'#8c8c8c'}}>正在分析当前周期…</div></div>}
       {aiResult&&<Space direction="vertical" style={{width:'100%'}} size="middle">
@@ -145,9 +126,24 @@ export default function AdminStagePlanner({plan,classes=[],onChange,onEdit}:{pla
           ]}/>}
       </Space>}
     </Modal>
-    <Modal title="遗传算法排课候选" open={!!schedulePreview} onCancel={()=>setSchedulePreview(undefined)} onOk={()=>void applyAutoSchedule()} confirmLoading={busy} okText="校验并应用候选" cancelText="暂不应用" width={820}>
+    <Modal title="AI 课程周段填充结果" open={!!fillResult} onCancel={()=>setFillResult(undefined)} footer={<Button type="primary" onClick={()=>setFillResult(undefined)}>返回课表微调</Button>} width={760}>
+      {fillResult&&<Space direction="vertical" style={{width:'100%'}}>
+        <Alert showIcon type={fillResult.source==='llm'?'success':'info'} title={`${fillResult.source==='llm'?`AI 课程顺序 · ${fillResult.model||'模型'}`:'按课程库规则排序'} · 已填入${fillResult.filled}/${fillResult.total_candidates}门课程`} description="课程按适用班级、专业方向和培养学期匹配，自动避开考试周及每周两门上限。已分配教师、节次和教室的课程不会由此操作生成；请在甘特图继续人工微调。"/>
+        {fillResult.placed?.length>0&&<Table size="small" rowKey="task_id" pagination={{pageSize:6}} dataSource={fillResult.placed} columns={[
+          {title:'课程',dataIndex:'course'},{title:'班级',dataIndex:'group'},{title:'专业',dataIndex:'major'},
+          {title:'培养学期',dataIndex:'semester',render:(v:number)=>`第${v}学期`},{title:'周段',render:(_:unknown,row:any)=>`W${row.start_week}—W${row.end_week}`},
+        ]}/>}
+        {fillResult.unplaced?.length>0&&<Table size="small" rowKey={(r:any)=>`${r.course}-${r.group}`} dataSource={fillResult.unplaced} pagination={{pageSize:5}} columns={[
+          {title:'未排课程',dataIndex:'course'},{title:'班级',dataIndex:'group'},{title:'原因',dataIndex:'reason'},
+        ]}/>}
+      </Space>}
+    </Modal>
+    <Modal title={previewMode==='ai-draft'?'AI 课表初稿':'遗传算法排课候选'} open={!!schedulePreview} onCancel={()=>setSchedulePreview(undefined)} onOk={()=>void applyAutoSchedule()} confirmLoading={busy} okText="校验并应用，继续人工微调" cancelText="暂不应用" width={820}>
       {schedulePreview&&<Space direction="vertical" style={{width:'100%'}}>
-        <Alert type="info" showIcon title={`候选覆盖${schedulePreview.scheduled}门课程 · 软目标评分${schedulePreview.score} · ${schedulePreview.generations}代`} description="教师、班级与教学周段保持不变。该候选在应用时会再次校验学时、考试周、班级/教师/教室冲突、教室容量与类型。候选30分钟后过期。"/>
+        <Alert type="info" showIcon title={`${previewMode==='ai-draft'?(schedulePreview.draft_source==='llm'?`AI排序建议 · ${schedulePreview.draft_model||'模型'}`:'规则排序（AI未配置或不可用）'):'遗传算法候选'} · 覆盖${schedulePreview.scheduled}门课程 · 评分${schedulePreview.score}`} description="课程周段、班级和教师保持不变。AI分析专业和培养学期并提供编排顺序；节次与教室由排课引擎在硬约束下生成。应用时会再次校验学时、考试周、班级/教师/教室冲突、教室容量与类型。应用后可继续人工微调；候选30分钟后过期。"/>
+        {previewMode==='ai-draft'&&<Table size="small" rowKey="task_id" pagination={{pageSize:6}} dataSource={schedulePreview.ordering} columns={[
+          {title:'编排顺序',render:(_:unknown,_row:any,index:number)=>index+1},{title:'课程',dataIndex:'name'},{title:'班级专业',dataIndex:'major',render:(v:string,row:any)=>`${v||'专业未标注'} · ${row.group}`},{title:'培养学期',dataIndex:'semester',render:(v:number)=>v?`第${v}学期`:'未标注'},
+        ]}/>}
         <Table size="small" rowKey="task_id" pagination={{pageSize:8}} dataSource={schedulePreview.tasks} columns={[
           {title:'课程',dataIndex:'name'},{title:'班级',dataIndex:'group'},
           {title:'教师',dataIndex:'teacher_names',render:(names:string[])=>names?.filter(Boolean).join('、')||'已锁定'},
@@ -169,7 +165,7 @@ export default function AdminStagePlanner({plan,classes=[],onChange,onEdit}:{pla
           return <div key={`${course.id}:${course.cohort}:${course.major}`} draggable={editable&&!busy&&schedulable} onDragStart={e=>drag(e,item)} style={{border:`1px solid ${selected?.course_id===course.id?'#436684':'#e4e1ed'}`,background:'#f8f9fb',borderRadius:6,padding:10,marginBottom:10,cursor:editable&&schedulable?'grab':'default'}}>
             <Typography.Text strong>{course.name}</Typography.Text><Button size="small" style={{display:'block',marginTop:5,touchAction:'none',cursor:'grab'}} disabled={!editable||busy||!schedulable} aria-label={`拖拽放置 ${course.name}`} onPointerDown={e=>beginPointer(e,item,course.name)} onPointerMove={e=>{if(pointer.current)setGhost({x:e.clientX,y:e.clientY,name:pointer.current.name});}} onPointerUp={endPointer} onPointerCancel={()=>{pointer.current=null;setGhost(undefined);}}>拖拽放置</Button>
             {course.major&&<div style={{fontSize:11,color:'#436684',marginTop:4}}>{course.major} · {normalizeCohort(course.cohort)}级 · 第{course.semester}学期</div>}
-            <div style={{fontSize:12,margin:'4px 0'}}>{course.credits}学分 · {course.required_hours}学时 · {course.weekly_hours??'未注明'}节/周 · 教学计划 {weeks??'待补录'} 周</div>
+            <div style={{fontSize:12,margin:'4px 0'}}>{course.credits}学分 · {course.required_hours}学时 · {course.weekly_hours??'未注明'}节/周 · 教学计划 {weeks??'待补录'} 周{course.weekdays?.length?` · ${weekdayLabel(course.weekdays)}`:''}</div>
             <Space wrap><Button size="small" disabled={!editable||busy||!schedulable} onClick={()=>{setSelected(item);message.info('请点击班级行中的起始周');}}>选择放置</Button></Space>
             {!schedulable&&<div style={{fontSize:11,color:'#e5484d',marginTop:4}}>课程库未提供授课周数，请先在课程数据中补齐</div>}
             {course.notes&&<Typography.Paragraph type="secondary" style={{fontSize:11,margin:'5px 0 0'}}>{course.notes}</Typography.Paragraph>}
@@ -178,18 +174,12 @@ export default function AdminStagePlanner({plan,classes=[],onChange,onEdit}:{pla
       </Card>}
       <div style={{flex:'1 1 620px',minWidth:0}}>
         {selected&&<Alert type="success" style={{marginBottom:10}} title="已选择课程：点击班级中的起始周，或直接拖拽放置" action={<Button size="small" onClick={()=>setSelected(undefined)}>取消选择</Button>}/>}
-        {editable&&<div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginBottom:10,padding:'8px 10px',background:'#f4f5f7',border:'1px solid #e2e5e9',borderRadius:8}}>
-          <Typography.Text strong>考试周设置</Typography.Text>
-          <Select size="small" aria-label="选择年级" value={examCohort} onChange={setExamCohort} style={{width:160}} options={cohorts.map((c:string)=>({value:c,label:c==='*'?'默认（全部年级）':`${normalizeCohort(c)}级`}))}/>
-          <Button size="small" type="primary" loading={busy} onClick={()=>void saveExam()}>保存考试周</Button>
-          <Typography.Text type="secondary" style={{fontSize:12}}>在下方表头第3行点选周次，切换该年级的考试周；全部取消则该年级无考试周。</Typography.Text>
-        </div>}
+        {selectedCohort==='__all__'&&Object.keys(plan.cohort_calendar_rules||{}).length>1&&<Alert showIcon type="info" title="不同年级使用各自开课日期；选择单一年级可查看对应周日期。" style={{marginBottom:8}}/>}
         {!configuredGroups.length?<Empty description="先添加并保存开课班级，即可出现空白课表"/>:!visibleGroups.length?<Empty description="当前年级、专业筛选范围内没有班级"/>:<div style={{overflowX:'auto',border:'1px solid #ddd',borderRadius:8}}><table aria-label={`管理员${weeks}周班级课表`} style={{borderCollapse:'collapse',width:'100%',minWidth:304+weeks*64,tableLayout:'fixed'}}>
           <colgroup><col style={{width:68}}/><col style={{width:110}}/><col style={{width:126}}/>{Array.from({length:weeks},(_,i)=><col key={i}/>)}</colgroup>
           <thead>
-            <tr><th rowSpan={editable?3:2} style={{background:'#f3f4f6',border:'1px solid #ddd',position:'sticky',left:0,zIndex:4,fontSize:14,padding:'6px 3px'}}>年级</th><th rowSpan={editable?3:2} style={{background:'#f3f4f6',border:'1px solid #ddd',position:'sticky',left:68,zIndex:4,fontSize:14,padding:'6px 3px'}}>专业</th><th rowSpan={editable?3:2} style={{background:'#f3f4f6',border:'1px solid #ddd',position:'sticky',left:178,zIndex:4,fontSize:14,padding:'6px 3px'}}>开课班级</th>{Array.from({length:weeks},(_,i)=><th key={i} style={{border:'1px solid #ddd',padding:'8px 2px',background:'#f3f4f6',fontSize:12}}>第{i+1}周</th>)}</tr>
-            <tr>{Array.from({length:weeks},(_,i)=><th key={i} style={{border:'1px solid #ddd',padding:'5px 1px',fontSize:12,fontWeight:400}}>{weekDates(plan.start_date,i+1)}</th>)}</tr>
-            {editable&&<tr>{Array.from({length:weeks},(_,i)=>{const w=i+1;const on=(examDraft[examCohort]||[]).includes(w);return <th key={i} style={{border:'1px solid #ddd',padding:2,background:on?'#fbe9e9':'#fff'}}><Button size="small" type={on?'primary':'default'} block aria-label={`切换 ${examCohort} 第${w}周考试周`} onClick={()=>toggleExamWeek(w)} style={{fontSize:12,padding:'0 2px',height:22}}>{on?'考试':'·'}</Button></th>;})}</tr>}
+            <tr><th rowSpan={2} style={{background:'#f3f4f6',border:'1px solid #ddd',position:'sticky',left:0,zIndex:4,fontSize:14,padding:'6px 3px'}}>年级</th><th rowSpan={2} style={{background:'#f3f4f6',border:'1px solid #ddd',position:'sticky',left:68,zIndex:4,fontSize:14,padding:'6px 3px'}}>专业</th><th rowSpan={2} style={{background:'#f3f4f6',border:'1px solid #ddd',position:'sticky',left:178,zIndex:4,fontSize:14,padding:'6px 3px'}}>开课班级</th>{Array.from({length:weeks},(_,i)=><th key={i} style={{border:'1px solid #ddd',padding:'8px 2px',background:'#f3f4f6',fontSize:12}}>第{i+1}周</th>)}</tr>
+            <tr>{Array.from({length:weeks},(_,i)=><th key={i} style={{border:'1px solid #ddd',padding:'5px 1px',fontSize:12,fontWeight:400}}>{weekDates((selectedCohort!=='__all__'&&plan.cohort_calendar_rules?.[selectedCohort]?.start_date)||plan.start_date,i+1)}</th>)}</tr>
           </thead>
           <tbody>{visibleGroups.map((group:string)=>{
             const bars=stageLanes<any>(placed.filter((t:any)=>t.group===group));
@@ -198,13 +188,13 @@ export default function AdminStagePlanner({plan,classes=[],onChange,onEdit}:{pla
             const scope=groupScope(group);
             return <tr key={group}><td title={scope.cohort?`${scope.cohort}级`:'未设置'} style={{border:'1px solid #ddd',padding:'5px 4px',position:'sticky',left:0,background:'white',zIndex:2,whiteSpace:'nowrap',fontSize:13,lineHeight:1.2}}>{scope.cohort?`${scope.cohort}级`:'未设置'}</td><td title={scope.major||'未设置'} style={{border:'1px solid #ddd',padding:'5px 5px',position:'sticky',left:68,background:'white',zIndex:2,fontSize:13,lineHeight:1.2,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{scope.major||'未设置'}</td><th title={group} style={{border:'1px solid #ddd',padding:'5px 5px',position:'sticky',left:178,background:'white',zIndex:2,fontSize:13,lineHeight:1.2,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{group}</th><td colSpan={weeks} style={{padding:0,border:'1px solid #ddd'}}>
               <div data-stage-group={group} style={{height:rowHeight,position:'relative'}} onDragOver={e=>{if(editable&&!busy&&e.dataTransfer.types.includes(MIME)){e.preventDefault();e.dataTransfer.dropEffect='move';}}} onDrop={e=>{e.preventDefault();try{const item=JSON.parse(e.dataTransfer.getData(MIME));const box=e.currentTarget.getBoundingClientRect();place(group,dropWeek(e.clientX,box.left,box.width,weeks),item);}catch{message.error('请从课程列表或现有课程块拖入');}}}>
-                {Array.from({length:weeks},(_,i)=>{const w=i+1;const isExam=examSet.has(w);return <Button key={i} type="text" aria-label={`放置到 ${group} 第${w}周`} disabled={!editable||busy||isExam} onClick={()=>place(group,w)} style={{position:'absolute',left:`${i*cellWidth}%`,width:`${cellWidth}%`,height:'100%',borderRadius:0,borderRight:'1px solid #eee',background:isExam?'#fbe9e9':selected?'#faf8ff':'white',padding:0,color:'#bbb',fontSize:11}}>{isExam?'考试':selected?'+':''}</Button>;})}
+              {Array.from({length:weeks},(_,i)=>{const w=i+1;const isExam=examSet.has(w),outsideGradeWeeks=w>groupWeeks(group);return <Button key={i} type="text" aria-label={`放置到 ${group} 第${w}周`} disabled={!editable||busy||isExam||outsideGradeWeeks} onClick={()=>place(group,w)} style={{position:'absolute',left:`${i*cellWidth}%`,width:`${cellWidth}%`,height:'100%',borderRadius:0,borderRight:'1px solid #eee',background:isExam?'#fbe9e9':outsideGradeWeeks?'#f3f3f3':selected?'#faf8ff':'white',padding:0,color:'#bbb',fontSize:11}}>{isExam?'考试':outsideGradeWeeks?'—':selected?'+':''}</Button>;})}
                 {bars.map(({task,lane})=>{
                   const teacherNames=task.teacher_names?.filter(Boolean).join('、')||'未分配教师';
                   return <div key={task.id} draggable={editable&&!busy} onDragStart={e=>drag(e,{task_id:task.id})} style={{position:'absolute',left:`${(task.start_week-1)*cellWidth}%`,width:`${(task.end_week-task.start_week+1)*cellWidth}%`,top:lane*laneStep+2,height:84,background:'#edf3fa',border:'1px solid #b5c5d8',borderRadius:5,boxSizing:'border-box',padding:'3px 5px',cursor:editable?'grab':'default',overflow:'hidden'}}>
                     <Button type="text" size="small" title={task.name} onClick={stageTaskEditAction(task,onEdit)} style={{display:'flex',justifyContent:'flex-start',whiteSpace:'nowrap',height:'auto',minHeight:22,padding:0,fontSize:14,fontWeight:600,textAlign:'left',width:'100%',lineHeight:1.2,overflow:'hidden',textOverflow:'ellipsis'}}>{task.name}</Button>
                     <div title={teacherNames} style={{fontSize:12,marginTop:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{teacherNames}</div>
-                    <div title={stageRoomLabel(task.room_name)} style={{fontSize:12,lineHeight:'15px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{stageRoomLabel(task.room_name)}</div>
+                    {stageRoomLabel(task.room_address||task.room_name)&&<div title={stageRoomLabel(task.room_address||task.room_name)} style={{fontSize:12,lineHeight:'15px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{stageRoomLabel(task.room_address||task.room_name)}</div>}
                     {editable&&<Popconfirm title="移回待排？保留来源课程记录。" onConfirm={()=>action(()=>api.unplaceCourse(plan.id,task.id,plan.revision))}><Button size="small" type="link" disabled={busy} style={{padding:0,height:20,fontSize:12,lineHeight:'20px'}}>移回待排</Button></Popconfirm>}
                   </div>;
                 })}

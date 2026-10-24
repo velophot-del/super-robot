@@ -9,6 +9,7 @@ class TeacherBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=50, description="教师姓名")
     teacher_code: str = Field(..., min_length=1, max_length=30, description="教师工号")
     department: Optional[str] = Field(None, max_length=100)
+    offering_unit_id: Optional[int] = Field(None, ge=1)
     title: Optional[str] = Field(None, max_length=50)
     position: Optional[Literal['教师', '教研室主任', '教研室副主任', '院长', '副院长']] = '教师'
     review_major: Optional[str] = Field(None, max_length=100)
@@ -31,6 +32,7 @@ class TeacherUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=50)
     teacher_code: Optional[str] = Field(None, min_length=1, max_length=30)
     department: Optional[str] = None
+    offering_unit_id: Optional[int] = Field(None, ge=1)
     title: Optional[str] = None
     position: Optional[Literal['教师', '教研室主任', '教研室副主任', '院长', '副院长']] = None
     review_major: Optional[str] = Field(None, max_length=100)

@@ -66,10 +66,10 @@ export interface Course {
   course_type: string;
   course_nature: string;
   semester?: number | null;
-  semester_sessions: number;
-  weekly_sessions: number;
-  hours_per_session: number;
-  total_hours?: number;
+  cohort?: string | null;
+  teaching_weeks?: number | null;
+  weekdays: number[];
+  total_hours?: number | null;
   credits?: number;
   requires_consecutive: boolean;
   requires_lab: boolean;
@@ -103,10 +103,10 @@ export interface ClassCourseInfo {
   course_id: number;
   course_name: string;
   course_code: string;
-  semester_sessions: number;
-  weekly_sessions: number;
-  hours_per_session: number;
+  teaching_weeks: number;
+  weekdays: number[];
   total_hours?: number;
+  weekly_hours: number;
   teacher_names: string[];
   time_slots: number;
 }
@@ -124,10 +124,10 @@ export interface TeacherCourseInfo {
   course_id: number;
   course_name: string;
   course_code: string;
-  semester_sessions: number;
-  weekly_sessions: number;
-  hours_per_session: number;
+  teaching_weeks: number;
+  weekdays: number[];
   total_hours?: number;
+  weekly_hours: number;
   class_name: string;
   time_slots: number;
 }

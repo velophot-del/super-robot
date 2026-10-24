@@ -9,6 +9,23 @@ test('grade tabs list in-school cohorts and keep unset class grades visible',asy
   assert.equal(matchesGrade('2024','2026'),false);
   assert.equal(matchesGrade(null,'2026'),true);
 });
+test('exam weeks normalize cohort labels and apply to every major group',async()=>{
+  const {examWeeksFor}=await import('../src/lib/examWeeks.ts');
+  const plan={weeks:20,exam_weeks:{'2024':[5,6]}};
+  assert.deepEqual([...examWeeksFor(plan,'2024级','视觉传达设计班')],[5,6]);
+  assert.deepEqual([...examWeeksFor(plan,'2024届','包装设计班')],[5,6]);
+  assert.deepEqual([...examWeeksFor({weeks:20,exam_weeks:{'2024级':[4],'2024届':[6]}},'2024','数字艺术班')],[4,6]);
+});
+test('stage exam options include all active cohorts in cycle groups',async()=>{
+  const {stageCohorts}=await import('../src/lib/adminStageGrid.ts');
+  const classes=[
+    {name:'视传24班',grade:'2024级',is_active:true},
+    {name:'包装24班',grade:'2024',is_active:true},
+    {name:'交互26班',grade:'2026届',is_active:true},
+    {name:'停用班',grade:'2025',is_active:false},
+  ];
+  assert.deepEqual(stageCohorts({groups:['视传24班','包装24班','交互26班']},classes),['2024','2026']);
+});
 test('stage cells distinguish taught periods, reserved remainder, and free time',async()=>{
   const {stageCell}=await import('../src/lib/stageGrid.ts');
   const tasks=[{id:1,start_week:1,end_week:4,tail_weeks:0,slots:[{day:1,start:1,count:4,phase:'normal'}]}];
@@ -36,9 +53,9 @@ test('clicking a placed course title invokes the task editor callback',async()=>
 
 test('stage cards show an assigned room or an unassigned label',async()=>{
   const {stageRoomLabel}=await import('../src/lib/adminStageGrid.ts');
-  assert.equal(stageRoomLabel('设计楼 302'), '设计楼 302');
-  assert.equal(stageRoomLabel(null), '未分配');
-  assert.equal(stageRoomLabel('  '), '未分配');
+  assert.equal(stageRoomLabel('设计楼 302'), '上课地点：设计楼 302');
+  assert.equal(stageRoomLabel(null), '未分配教室');
+  assert.equal(stageRoomLabel('  '), '未分配教室');
 });
 
 test('stage filters use curriculum task scope and fall back to class records',async()=>{

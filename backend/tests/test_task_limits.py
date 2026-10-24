@@ -23,6 +23,9 @@ class TaskLimitsTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_limits_edit_preserves_imported_course_stage_mode_and_room_without_preset_students(self):
         pid,h,task=await self.create_task()
+        from app.models.classroom import Classroom
+        self.db.get(Classroom,task['room_id']).capacity=60
+        self.db.commit()
         original=deepcopy(self.db.get(TeachingTask,task['id']).payload)
         url=f"/api/planning/plans/{pid}/tasks/{task['id']}/limits"
         result=await self.client.put(url,headers=h,json={'revision':2,'teacher_count':2,'max_students':45})
@@ -40,6 +43,23 @@ class TaskLimitsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(denied.status_code,403)
         self.assertEqual((await self.client.post(f'/api/planning/plans/{pid}/open',headers=h)).status_code,200)
         self.assertEqual((await self.client.put(url,headers=h,json={'revision':3,'teacher_count':1,'max_students':40})).status_code,409)
+
+    async def test_draft_room_save_clear_and_capacity_failure_are_atomic(self):
+        from app.models.classroom import Classroom
+        pid,h,task=await self.create_task()
+        self.db.add(Classroom(id=901,name='302',room_code='R901',building='设计楼',floor=3,capacity=40,is_available=True))
+        self.db.commit()
+        url=f"/api/planning/plans/{pid}/tasks/{task['id']}/limits"
+        saved=await self.client.put(url,headers=h,json={'revision':2,'teacher_count':1,'max_students':30,'room_id':901})
+        self.assertEqual(saved.status_code,200,saved.text)
+        self.assertEqual(saved.json()['task']['room_address'],'设计楼 · 3层 · 302')
+        failed=await self.client.put(url,headers=h,json={'revision':3,'teacher_count':2,'max_students':50,'room_id':901})
+        self.assertEqual(failed.status_code,409,failed.text)
+        self.db.expire_all()
+        self.assertEqual(self.db.get(TeachingTask,task['id']).payload['max_students'],30)
+        cleared=await self.client.put(url,headers=h,json={'revision':3,'teacher_count':1,'max_students':30,'room_id':None})
+        self.assertEqual(cleared.status_code,200,cleared.text)
+        self.assertIsNone(cleared.json()['task']['room_address'])
 
     async def test_actual_students_are_entered_after_scheduling_not_taken_from_roster(self):
         pid,h,task=await self.create_task()

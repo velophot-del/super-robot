@@ -28,10 +28,10 @@ def supervision_kind(task) -> str | None:
     return None
 
 
-def actual_task_hours(task, plan) -> int:
+def actual_task_hours(task, plan, db=None) -> int:
     """实际授课课时：优先按周内节次统计；无节次时用培养方案周课时与尾周课时还原。"""
     if task.get('slots'):
-        return len(list(occurrences(task, plan)))
+        return len(list(occurrences(task, plan, db)))
     metadata = (task.get('source') or {}).get('course_metadata') or {}
     try:
         required = int(task.get('required_hours') or 0)
@@ -111,7 +111,7 @@ def compute_teacher_workload(db, plan, teacher_id, tasks):
             # 实际选课人数在排课后由学生选课结果回填，未回填前不做人数系数计算。
             row['note'] = '待学生选课结束后统计实际授课人数'
         else:
-            hours = actual_task_hours(task, plan)
+            hours = actual_task_hours(task, plan, db)
             row['course_hours'] = hours
             if len(assigned) <= 1:
                 row.update(weeks=None, allocation='全部',

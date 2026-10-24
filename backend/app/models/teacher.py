@@ -1,5 +1,5 @@
 """教师数据模型"""
-from sqlalchemy import Column, Integer, String, Text, DateTime, func
+from sqlalchemy import Column, Integer, String, Text, DateTime, func, ForeignKey
 from app.database import Base
 from app.models.base import TimestampMixin
 
@@ -12,6 +12,7 @@ class Teacher(Base, TimestampMixin):
     name = Column(String(50), nullable=False, comment="教师姓名")
     teacher_code = Column(String(30), unique=True, nullable=False, comment="教师工号")
     department = Column(String(100), nullable=True, comment="所属部门/教研组")
+    offering_unit_id = Column(Integer, ForeignKey('offering_units.id'), nullable=True, comment='所属教研室')
     title = Column(String(50), nullable=True, comment="职称")
     position = Column(String(50), nullable=True, default="教师")
     review_major = Column(String(100), nullable=True)

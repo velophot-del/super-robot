@@ -12,6 +12,7 @@ from app.services.authorization import check
 from app.services.stage_planning import task_dict,validate_tasks,validate_student_limit
 from app.services.academic_scope import is_global, plan_term, groups_for_cycle
 from app.services.course_catalog import course_catalog_scope, course_pool_rows
+from app.services.cohort_calendar import cohort_weeks, cohort_exam_weeks, cohort_start_dates
 from app.services.exam_weeks import exam_weeks_for
 from app.api.planning import write,get_plan,tasks_for,event
 
@@ -43,22 +44,28 @@ class AutoScheduleApplyInput(BaseModel):
     preview_id:int=Field(ge=1)
 
 
+class AiCourseAutofillInput(BaseModel):
+    revision:int=Field(ge=1)
+
+
 def pool_rows(db,plan):
     settings=plan.settings or {}
+    start_dates=cohort_start_dates(db,plan)
     if is_global(plan):
-        scope=course_catalog_scope(db,plan.start_date,plan_term(plan),settings.get('groups') or None)
+        scope=course_catalog_scope(db,plan.start_date,plan_term(plan),settings.get('groups') or None,start_dates_by_cohort=start_dates)
     else:
         scope=course_catalog_scope(db,plan.start_date,plan_term(plan),settings.get('groups') or None,
-            settings.get('major'),settings.get('cohort'),settings.get('semester'))
+            settings.get('major'),settings.get('cohort'),settings.get('semester'),start_dates_by_cohort=start_dates)
     return [],course_pool_rows(scope)
 
 
-def validate_spans(plan,tasks):
+def validate_spans(plan,tasks,db=None):
     weekly=defaultdict(list)
     for task in tasks:
         if not task.get('start_week'):continue
-        if task['start_week']>task['end_week'] or task['end_week']>plan.weeks:raise HTTPException(409,'课程周段越界')
-        exam=exam_weeks_for(plan,task.get('cohort'),task.get('group'),plan.weeks)
+        limit=cohort_weeks(db,plan,task.get('cohort')) if db is not None else plan.weeks
+        if task['start_week']>task['end_week'] or task['end_week']>limit:raise HTTPException(409,f'课程周段越界（该年级授课周期为{limit}周）')
+        exam=cohort_exam_weeks(db,plan,task.get('cohort'),task.get('group')) if db is not None else exam_weeks_for(plan,task.get('cohort'),task.get('group'),plan.weeks)
         blocked=sorted(exam & set(range(task['start_week'],task['end_week']+1)))
         if blocked:raise HTTPException(409,f"课程不能进入该年级考试周（第{'、'.join(map(str,blocked))}周）")
         keys=['student:'+s for s in task.get('student_ids',[])] or ['group:'+(task.get('class_name') or task['group'])]
@@ -75,6 +82,13 @@ def course_pool(plan_id:int,user=Depends(require_user),db:Session=Depends(get_db
     check(user,'admin');plan=get_plan(db,plan_id);documents,rows=pool_rows(db,plan)
     return {'document_id':None,'document_ids':[],'revision':None,
             'global_cycle':is_global(plan),'courses':rows}
+
+
+@router.post('/{plan_id}/auto-fill/ai')
+def ai_course_autofill(plan_id:int,data:AiCourseAutofillInput,user=Depends(require_user),db:Session=Depends(get_db)):
+    check(user,'admin')
+    from app.services.ai_course_autofill import autofill_draft_timetable
+    return autofill_draft_timetable(db,plan_id,data.revision,user)
 
 
 @router.post('/{plan_id}/auto-schedule')
@@ -97,6 +111,29 @@ def preview_auto_schedule(plan_id:int,data:AutoSchedulePreviewInput,user=Depends
             'plan_revision':row.plan_revision}
 
 
+@router.post('/{plan_id}/auto-schedule/ai-draft/preview')
+def preview_ai_draft(plan_id:int,user=Depends(require_user),db:Session=Depends(get_db)):
+    check(user,'admin');plan=get_plan(db,plan_id)
+    from app.services.auto_placement import build_ai_draft_candidate
+    candidate=build_ai_draft_candidate(db,plan)
+    with write(db):
+        row=AutoSchedulePreview(plan_id=plan.id,plan_revision=plan.revision,algorithm='ai-draft',
+            payload=candidate,expires_at=datetime.utcnow()+timedelta(minutes=30))
+        db.add(row);db.flush()
+        return {**candidate,'preview_id':row.id,'expires_at':row.expires_at.isoformat()+'Z',
+            'plan_revision':row.plan_revision}
+
+
+@router.post('/{plan_id}/auto-schedule/ai-draft',summary='一键生成并应用AI课表初稿')
+def generate_ai_draft(plan_id:int,user=Depends(require_user),db:Session=Depends(get_db)):
+    check(user,'admin');plan=get_plan(db,plan_id)
+    from app.services.auto_placement import build_ai_draft_candidate,apply_auto_schedule_candidate
+    candidate=build_ai_draft_candidate(db,plan)
+    result=apply_auto_schedule_candidate(db,plan,user,candidate)
+    return {**result,'draft_source':candidate.get('draft_source'),
+        'draft_model':candidate.get('draft_model'),'ordering':candidate.get('ordering')}
+
+
 @router.post('/{plan_id}/auto-schedule/apply')
 def apply_auto_schedule(plan_id:int,data:AutoScheduleApplyInput,user=Depends(require_user),db:Session=Depends(get_db)):
     check(user,'admin');plan=get_plan(db,plan_id);preview=db.get(AutoSchedulePreview,data.preview_id)
@@ -116,7 +153,7 @@ def update_groups(plan_id:int,data:GroupsInput,user=Depends(require_user),db:Ses
         if not groups or any(len(g)>100 for g in groups):raise HTTPException(422,'请填写有效班级名称')
         eligible=None
         if is_global(plan):
-            eligible=set(groups_for_cycle(db,plan.start_date,plan_term(plan)))
+            eligible=set(groups_for_cycle(db,plan.start_date,plan_term(plan),cohort_start_dates(db,plan)))
             known={row.name for row in db.query(ClassInfo).filter(ClassInfo.is_active.is_(True))}
             if any(group in known and group not in eligible for group in groups):
                 raise HTTPException(422,'当前周期不能加入已毕业或未纳入培养方案的班级')
@@ -174,7 +211,7 @@ def place_course(plan_id:int,data:PlacementInput,user=Depends(require_user),db:S
         slots=[{'day':s.day,'start':s.start,'count':s.count,'phase':s.phase} for s in db.query(PeriodSlot).filter_by(task_id=task.id)] if task else []
         candidate={**payload,'slots':slots}
         others=[t for t in tasks if not task or t['id']!=task.id]
-        validate_spans(plan,[*others,candidate])
+        validate_spans(plan,[*others,candidate],db)
         validate_student_limit(db,candidate)
         complete=[t for t in [*others,candidate] if t.get('start_week') and t.get('slots')]
         if complete:validate_tasks(db,plan,complete)

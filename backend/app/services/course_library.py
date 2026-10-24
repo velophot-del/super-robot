@@ -44,6 +44,7 @@ def attach_sources(db,courses):
         for link,doc in db.query(CurriculumCourse,CurriculumDocument).join(CurriculumDocument,CurriculumCourse.document_id==CurriculumDocument.id).filter(CurriculumCourse.course_id.in_(ids)).order_by(CurriculumDocument.id.desc()):
             sources[link.course_id].append({'document_id':doc.id,'major':doc.major,'cohort':doc.cohort,'revision':doc.revision,'metadata':link.metadata_json})
     from app.models.teacher import Teacher
+    from app.models.planning import AcademicDirection, AcademicProgram
     leader_ids={c.leader_teacher_id for c in courses if c.leader_teacher_id is not None}
     leaders={t.id:t for t in db.query(Teacher).filter(Teacher.id.in_(leader_ids))} if leader_ids else {}
     for c in courses:
@@ -53,6 +54,10 @@ def attach_sources(db,courses):
         c.leader_teacher_code=leader.teacher_code if leader else None
         unit=db.get(OfferingUnit,c.offering_unit_id) if c.offering_unit_id else None
         c.offering_unit_name=unit.name if unit else None
+        program=db.get(AcademicProgram,c.program_id) if c.program_id else None
+        direction=db.get(AcademicDirection,c.direction_id) if c.direction_id else None
+        c.program_name=program.name if program else None
+        c.direction_name=direction.name if direction else None
     return courses
 
 

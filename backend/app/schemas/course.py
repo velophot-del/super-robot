@@ -1,7 +1,16 @@
 """课程相关Pydantic模式"""
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import Optional
 from datetime import datetime
+
+
+def _clean_weekdays(value):
+    if value is None:
+        return []
+    days = sorted({int(day) for day in value})
+    if any(day < 1 or day > 7 for day in days):
+        raise ValueError('每周上课日须为1至7（周一至周日）')
+    return days
 
 
 class CourseBase(BaseModel):
@@ -14,19 +23,24 @@ class CourseBase(BaseModel):
     cohort: Optional[str] = Field(None, max_length=20, description="适用年级，如2026")
     teaching_weeks: Optional[int] = Field(None, ge=1, le=20, description="授课周数")
     tail_hours: Optional[int] = Field(None, ge=0, description="尾周学时")
-    semester_sessions: int = Field(default=16, ge=1, le=40, description="学期教学次数")
-    weekly_sessions: int = Field(default=1, ge=1, le=8, description="每周上课次数")
-    hours_per_session: int = Field(default=2, ge=1, le=6, description="每次课时数(1次课=几学时)")
-    total_hours: Optional[int] = Field(None, ge=0, description="总课时数")
+    weekdays: list[int] = Field(default_factory=list, description="每周固定上课日（1=周一…7=周日）")
+    total_hours: Optional[int] = Field(None, ge=0, description="计划总学时")
     credits: Optional[float] = Field(default=2, ge=0)
     requires_consecutive: bool = Field(default=False, description="是否需要连排")
     requires_lab: bool = Field(default=False, description="是否需要实验室")
     priority: int = Field(default=0, ge=0, le=10, description="优先级")
     department: Optional[str] = Field(None, max_length=100)
+    program_id: Optional[int] = Field(None, ge=1)
+    direction_id: Optional[int] = Field(None, ge=1)
     offering_unit_id: Optional[int] = Field(None, ge=1)
     leader_teacher_id: Optional[int] = Field(None, ge=1)
     remarks: Optional[str] = None
     is_active: bool = True
+
+    @field_validator('weekdays', mode='before')
+    @classmethod
+    def validate_weekdays(cls, value):
+        return _clean_weekdays(value)
 
 
 class CourseCreate(CourseBase):
@@ -45,25 +59,32 @@ class CourseUpdate(BaseModel):
     cohort: Optional[str] = Field(None, max_length=20)
     teaching_weeks: Optional[int] = Field(None, ge=1, le=20)
     tail_hours: Optional[int] = Field(None, ge=0)
-    semester_sessions: Optional[int] = Field(None, ge=1, le=40)
-    weekly_sessions: Optional[int] = Field(None, ge=1, le=8)
-    hours_per_session: Optional[int] = Field(None, ge=1, le=6)
+    weekdays: Optional[list[int]] = None
     total_hours: Optional[int] = Field(None, ge=0)
     credits: Optional[float] = Field(None, ge=0)
     requires_consecutive: Optional[bool] = None
     requires_lab: Optional[bool] = None
     priority: Optional[int] = Field(None, ge=0, le=10)
     department: Optional[str] = None
+    program_id: Optional[int] = Field(None, ge=1)
+    direction_id: Optional[int] = Field(None, ge=1)
     offering_unit_id: Optional[int] = Field(None, ge=1)
     leader_teacher_id: Optional[int] = Field(None, ge=1)
     remarks: Optional[str] = None
     is_active: Optional[bool] = None
+
+    @field_validator('weekdays')
+    @classmethod
+    def validate_weekdays(cls, value):
+        return _clean_weekdays(value)
 
 
 class CourseResponse(CourseBase):
     """课程响应"""
     id: int
     offering_unit_name: Optional[str] = None
+    program_name: Optional[str] = None
+    direction_name: Optional[str] = None
     leader_teacher_name: Optional[str] = None
     leader_teacher_code: Optional[str] = None
     curriculum_sources: list[dict] = Field(default_factory=list)

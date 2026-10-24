@@ -1,6 +1,7 @@
 """CSV模板解析工具 - 支持批量导入排课实体数据"""
 import csv
 import io
+import re
 from typing import List, Dict, Any, Tuple
 
 
@@ -22,11 +23,12 @@ CSV_TEMPLATES = {
     },
     "teachers": {
         "required_fields": ["name", "teacher_code"],
-        "optional_fields": ["department", "title", "email", "phone", "max_weekly_hours", "remarks"],
+        "optional_fields": ["department", "offering_unit_code", "title", "email", "phone", "max_weekly_hours", "remarks"],
         "field_names": {
             "name": "姓名",
             "teacher_code": "工号",
             "department": "所属部门",
+            "offering_unit_code": "教研室编码",
             "title": "职称",
             "email": "邮箱",
             "phone": "电话",
@@ -35,10 +37,10 @@ CSV_TEMPLATES = {
         }
     },
     "courses": {
-        "required_fields": ["name", "course_code", "semester", "semester_sessions"],
-        "optional_fields": ["course_type", "course_nature", "cohort", "teaching_weeks", "tail_hours", "weekly_sessions", "hours_per_session", "total_hours",
+        "required_fields": ["name", "semester", "total_hours"],
+        "optional_fields": ["course_type", "course_nature", "cohort", "teaching_weeks", "tail_hours", "weekdays",
                           "credits", "requires_consecutive",
-                          "requires_lab", "priority", "department", "remarks", "leader_teacher_code", "offering_unit_code"],
+                          "requires_lab", "priority", "department", "program_code", "direction_name", "remarks", "leader_teacher_code", "offering_unit_code"],
         "field_names": {
             "name": "课程名称",
             "course_code": "课程编码",
@@ -50,15 +52,15 @@ CSV_TEMPLATES = {
             "tail_hours": "尾周学时",
             "leader_teacher_code": "课程负责人（工号）",
             "offering_unit_code": "开课单位编码",
-            "semester_sessions": "学期教学次数",
-            "weekly_sessions": "每周上课次数",
-            "hours_per_session": "每次课时",
+            "weekdays": "每周上课日",
             "total_hours": "总课时",
             "credits": "学分",
             "requires_consecutive": "需连排",
             "requires_lab": "需实验室",
             "priority": "优先级",
             "department": "所属专业",
+            "program_code": "专业编码",
+            "direction_name": "专业方向",
             "remarks": "备注",
         }
     },
@@ -111,10 +113,22 @@ def parse_csv_content(content: str, entity_type: str, overrides: dict | None = N
         # 创建中文表头到英文字段的映射
         header_map = {}
         field_name_map = template["field_names"]
+        legacy_course_headers = {
+            "学期教学次数": "semester_sessions",
+            "每周上课次数": "weekly_sessions",
+            "每次课时": "hours_per_session",
+            "每次学时": "hours_per_session",
+            "semester_sessions": "semester_sessions",
+            "weekly_sessions": "weekly_sessions",
+            "hours_per_session": "hours_per_session",
+        }
 
         for header in reader.fieldnames:
             header = header.strip()
             found = False
+            if entity_type == "courses" and header in legacy_course_headers:
+                header_map[header] = legacy_course_headers[header]
+                continue
             for eng_field, chinese_name in field_name_map.items():
                 if header == chinese_name or header == eng_field:
                     header_map[header] = eng_field
@@ -125,7 +139,12 @@ def parse_csv_content(content: str, entity_type: str, overrides: dict | None = N
 
         # 检查必填字段是否存在；页签指定的字段视为已提供。
         mapped_fields = set(header_map.values()) | set(overrides)
-        missing_required = [f for f in required_fields if f not in mapped_fields]
+        if entity_type == "courses":
+            missing_required = [f for f in ("name", "semester") if f not in mapped_fields]
+            if "total_hours" not in mapped_fields and "semester_sessions" not in mapped_fields:
+                missing_required.append("total_hours")
+        else:
+            missing_required = [f for f in required_fields if f not in mapped_fields]
         if missing_required:
             missing_names = [field_name_map.get(f, f) for f in missing_required]
             return [], [f"缺少必填字段: {', '.join(missing_names)}"]
@@ -145,9 +164,13 @@ def parse_csv_content(content: str, entity_type: str, overrides: dict | None = N
                 if overrides:
                     parsed_row.update(overrides)
 
+                if entity_type == "courses":
+                    _normalize_course_schedule_fields(parsed_row)
+
                 # 检查必填字段值
                 row_errors = []
-                for field in required_fields:
+                row_required = ("name", "semester", "total_hours") if entity_type == "courses" else required_fields
+                for field in row_required:
                     if field not in parsed_row or parsed_row[field] is None or parsed_row[field] == "":
                         row_errors.append(f"第{row_num}行: 必填字段'{field_name_map.get(field, field)}'为空")
 
@@ -166,6 +189,47 @@ def parse_csv_content(content: str, entity_type: str, overrides: dict | None = N
     return data_rows, errors
 
 
+_WEEKDAY_CHARS = {'一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '日': 7, '天': 7}
+
+
+def _parse_weekdays(value: Any) -> List[int]:
+    """解析每周上课日：支持“周一,周三”“星期一、星期五”“1,3”等写法。"""
+    if value is None or value == '':
+        return []
+    parts = list(value) if isinstance(value, (list, tuple, set)) else re.split(r'[,，、;；/\s]+', str(value).strip())
+    days = set()
+    for part in parts:
+        text = str(part).strip()
+        if not text:
+            continue
+        if not any(char in _WEEKDAY_CHARS for char in text):
+            days.update(int(digit) for digit in re.findall(r'[1-7]', text))
+            continue
+        match = re.search(r'([一二三四五六日天])', text)
+        if match:
+            days.add(_WEEKDAY_CHARS[match.group(1)])
+    return sorted(days)
+
+
+def _normalize_course_schedule_fields(row: Dict[str, Any]) -> None:
+    """将旧课程表的次数/每次课时字段转换为当前课程字段。"""
+    legacy_values = {field: row.pop(field, None)
+                     for field in ("semester_sessions", "weekly_sessions", "hours_per_session")}
+    sessions = legacy_values["semester_sessions"]
+    weekly_sessions = legacy_values["weekly_sessions"] or 1
+    hours_per_session = legacy_values["hours_per_session"] or 2
+    try:
+        sessions = int(sessions) if sessions not in (None, "") else None
+        weekly_sessions = max(1, int(weekly_sessions))
+        hours_per_session = int(hours_per_session)
+    except (TypeError, ValueError):
+        return
+    if row.get("total_hours") in (None, "") and sessions is not None:
+        row["total_hours"] = sessions * hours_per_session
+    if row.get("teaching_weeks") in (None, "") and sessions is not None:
+        row["teaching_weeks"] = (sessions + weekly_sessions - 1) // weekly_sessions
+
+
 def _convert_field_value(field: str, value: Any) -> Any:
     """转换字段值到正确的类型"""
     if value is None or value == "":
@@ -175,8 +239,10 @@ def _convert_field_value(field: str, value: Any) -> Any:
     if field == 'credits':
         try:return float(value)
         except (ValueError,TypeError):return value
-    if field in ("student_count", "max_weekly_hours", "semester_sessions",
-                 "semester", "teaching_weeks", "tail_hours", "weekly_sessions", "hours_per_session", "total_hours",
+    if field == 'weekdays':
+        return _parse_weekdays(value)
+    if field in ("student_count", "max_weekly_hours", "semester_sessions", "weekly_sessions", "hours_per_session",
+                 "semester", "teaching_weeks", "tail_hours", "total_hours",
                  "priority", "capacity", "floor"):
         try:
             return int(value)
@@ -236,8 +302,9 @@ def _get_example_data(entity_type: str) -> Dict[str, Any]:
             "phone": "13800001001", "max_weekly_hours": "16", "remarks": "示范数据"
         },
         "courses": {
-            "name": "数据结构", "course_code": "CS201", "semester": "2", "cohort": "2026", "teaching_weeks": "16", "tail_hours": "", "course_type": "专业课", "course_nature": "必修课",
-            "semester_sessions": "16", "weekly_sessions": "1", "hours_per_session": "2",
+            "name": "数据结构", "course_code": "", "semester": "2", "cohort": "2026",
+            "teaching_weeks": "16", "tail_hours": "", "weekdays": "周一,周三",
+            "course_type": "专业课", "course_nature": "必修课",
             "total_hours": "32", "credits": "4",
             "requires_consecutive": "否", "requires_lab": "否",
             "priority": "5", "department": "计算机科学", "remarks": "示范数据"

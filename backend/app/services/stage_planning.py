@@ -3,7 +3,7 @@ from datetime import timedelta
 from fastapi import HTTPException
 from app.models.planning import AcademicPlan, TeachingTask, PeriodSlot, TeachingAssignment
 from app.models.classroom import Classroom
-from app.services.exam_weeks import exam_weeks_for
+from app.services.cohort_calendar import cohort_weeks, cohort_start_date, cohort_exam_weeks
 
 
 def task_dict(db, task):
@@ -14,6 +14,7 @@ def task_dict(db, task):
                       for s in db.query(PeriodSlot).filter_by(task_id=task.id).order_by(PeriodSlot.day)],
             'teacher_ids': assignment.teacher_ids if assignment else [],
             'locked': bool(assignment and assignment.locked),'room_name':room.name if room else None,
+            'room_address':' · '.join(str(v) for v in [room.building, f'{room.floor}层' if room.floor is not None else None, room.name] if v) if room else None,
             # 实际选课人数在排课完成、学生选课结束后回填；未回填时为 0。
             'actual_student_count':task_student_count(task.payload)}
 
@@ -32,13 +33,14 @@ def validate_student_limit(db, task):
         raise HTTPException(409,f"{task['name']}的实际选课人数超过课程人数上限，请调整上限或教学组")
 
 
-def occurrences(task, plan):
+def occurrences(task, plan, db=None):
+    start_date = cohort_start_date(db, plan, task.get('cohort')) if db is not None else plan.start_date
     for week in range(task['start_week'], task['end_week']+1):
         phase = 'tail' if task.get('tail_weeks', 0) and week > task['end_week']-task['tail_weeks'] else 'normal'
         for slot in task['slots']:
             if slot.get('phase', 'normal') != phase:
                 continue
-            date = plan.start_date + timedelta(weeks=week-1, days=slot['day']-1)
+            date = start_date + timedelta(weeks=week-1, days=slot['day']-1)
             for period in range(slot['start'], slot['start']+slot['count']):
                 yield week, date, period
 
@@ -64,13 +66,14 @@ def validate_tasks(db, plan, tasks, check_slots=True):
         validate_student_limit(db,task)
         if not task.get('start_week') or not task.get('end_week'):
             raise HTTPException(409, f"{task['name']}尚未配置周段，不能发布")
-        if task['end_week'] > plan.weeks:
-            raise HTTPException(409, '课程周段超出周期范围')
-        exam=exam_weeks_for(plan,task.get('cohort'),task.get('group'),plan.weeks)
+        limit=cohort_weeks(db,plan,task.get('cohort'))
+        if task['end_week'] > limit:
+            raise HTTPException(409, f'课程周段超出该年级{limit}周授课周期')
+        exam=cohort_exam_weeks(db,plan,task.get('cohort'),task.get('group'))
         blocked=sorted(exam & set(range(task['start_week'],task['end_week']+1)))
         if blocked:
             raise HTTPException(409, f"{task['name']}进入考试周（第{'、'.join(map(str,blocked))}周）")
-        actual = list(occurrences(task, plan)) if check_slots else []
+        actual = list(occurrences(task, plan, db)) if check_slots else []
         if check_slots:
             if not task.get('slots'):
                 raise HTTPException(409, f"{task['name']}尚未配置周内节次，不能发布")
@@ -110,19 +113,19 @@ def validate_tasks(db, plan, tasks, check_slots=True):
     for other_plan, other in published_rows:
         data = task_dict(db, other)
         if not data.get('start_week'):continue
-        published_tasks.append((data,list(occurrences(data,other_plan))))
-        for _,date,period in occurrences(data, other_plan):
+        published_tasks.append((data,list(occurrences(data,other_plan,db))))
+        for _,date,period in occurrences(data, other_plan,db):
             if (data.get('room_id'), date, period) in room_slots:
                 raise HTTPException(409, '地点与其他已发布计划冲突')
 
     for task in tasks:
-        days={d for _,d,_ in occurrences(task,plan)}
+        days={d for _,d,_ in occurrences(task,plan,db)}
         courses_by_week=defaultdict(set)
         student_keys=task.get('student_ids') or [task.get('class_name') or task['group']]
         for data,slots in published_tasks:
             if students_overlap(task,data) and data['code']!=task['code'] and days & {d for _,d,_ in slots}:
                 raise HTTPException(409,'教学组与其他已发布计划同日安排了不同课程')
-        for data,slots in [(t,list(occurrences(t,plan))) for t in tasks]+published_tasks:
+        for data,slots in [(t,list(occurrences(t,plan,db))) for t in tasks]+published_tasks:
             if not students_overlap(task,data):continue
             keys=set(student_keys)&set(data['student_ids']) if task.get('student_ids') and data.get('student_ids') else student_keys
             for _,day,_ in slots:
@@ -136,14 +139,19 @@ def capacity(db, plan, task, teacher_id, profile, chosen):
     daily = defaultdict(int)
     occupied = set()
     course_codes = set()
+    candidate_start = cohort_start_date(db, plan, task.get('cohort'))
+    candidate_end = candidate_start + timedelta(weeks=cohort_weeks(db, plan, task.get('cohort')))
     for other, other_plan in chosen:
-        course_codes.add(other['code'])
-        for _,date,period in occurrences(other, other_plan):
+        other_occurrences=[entry for entry in occurrences(other, other_plan,db)
+                           if candidate_start <= entry[1] < candidate_end]
+        if other_occurrences:
+            course_codes.add(other['code'])
+        for _,date,period in other_occurrences:
             occupied.add((date, period))
-            relative_week = (date-plan.start_date).days//7+1
+            relative_week = (date-candidate_start).days//7+1
             weekly[relative_week] += 1
             daily[date] += 1
-    candidate_slots = list(occurrences(task, plan))
+    candidate_slots = list(occurrences(task, plan, db))
     reasons = []
     for week,date,period in candidate_slots:
         if (date,period) in occupied:

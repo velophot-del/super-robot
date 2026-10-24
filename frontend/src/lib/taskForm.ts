@@ -1,5 +1,5 @@
 export function taskLimitsPayload(values:Record<string,any>,revision:number){
-  return {revision,teacher_count:values.teacher_count,max_students:values.max_students};
+  return {revision,teacher_count:values.teacher_count,max_students:values.max_students,...(Object.hasOwn(values,'room_id')?{room_id:values.room_id??null}:{})};
 }
 
 export function taskCourseInfo(task:any){

@@ -151,7 +151,36 @@ class AcademicProgram(Base, TimestampMixin):
     code = Column(String(50), unique=True, nullable=False)
     name = Column(String(100), unique=True, nullable=False)
     duration_semesters = Column(Integer, nullable=False, default=8)
+    education_level = Column(String(20), nullable=False, default='本科', server_default='本科')
+    degree_category = Column(String(30), nullable=True)
+    construction_level = Column(String(300), nullable=True)
+    source_notes = Column(String(1000), nullable=True)
     is_active = Column(Boolean, nullable=False, default=True)
+
+
+class AcademicCatalogSeed(Base):
+    __tablename__ = 'academic_catalog_seeds'
+    seed_key = Column(String(80), primary_key=True)
+
+
+class CohortCalendarRule(Base, TimestampMixin):
+    __tablename__ = 'cohort_calendar_rules'
+    cohort = Column(String(20), primary_key=True)
+    weeks = Column(Integer, nullable=False, default=20)
+    start_date = Column(Date, nullable=False)
+    exam_weeks = Column(JSON, nullable=False, default=list)
+    revision = Column(Integer, nullable=False, default=1)
+
+
+class AcademicDirection(Base, TimestampMixin):
+    __tablename__ = 'academic_directions'
+    id = Column(Integer, primary_key=True)
+    program_id = Column(Integer, ForeignKey('academic_programs.id', ondelete='CASCADE'), nullable=False)
+    name = Column(String(150), nullable=False)
+    entry_type = Column(String(30), nullable=False, default='专业方向')
+    offering_unit_id = Column(Integer, ForeignKey('offering_units.id'), nullable=True)
+    notes = Column(String(1000), nullable=True)
+    source_order = Column(Integer, nullable=False, default=0)
 
 
 class OfferingUnit(Base, TimestampMixin):

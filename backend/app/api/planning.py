@@ -14,18 +14,18 @@ from app.models.teacher import Teacher
 from app.models.classroom import Classroom
 from app.models.planning import (AcademicPlan, TeachingTask, PeriodSlot, TeacherProfile,
     PreferenceDraft, PreferenceSubmission, MatchRun, TeachingAssignment, PlanningEvent, PublishedPlan, TeacherWorkloadEstimate,
-    TeacherScheduleConfirmation,ScheduleChangeRequest,ScheduleChangeDecision,TeacherNotification)
-from app.schemas.planning import PlanInput, TaskInput, TaskLimitsInput, RoomInput, ActualStudentsInput, ExamWeeksInput, MatchWeightsInput, ProfileInput, DraftInput, SubmitInput, AssignmentInput, ManualAssignmentInput, SelfProfileInput, WorkloadEstimateInput, ScheduleConfirmationInput, ScheduleChangeRequestInput, ScheduleChangeDecisionInput
+    TeacherScheduleConfirmation,ScheduleChangeRequest,ScheduleChangeDecision,TeacherNotification,CohortCalendarRule)
+from app.schemas.planning import PlanInput, TaskInput, TaskLimitsInput, RoomInput, ActualStudentsInput, MatchWeightsInput, ProfileInput, DraftInput, SubmitInput, AssignmentInput, ManualAssignmentInput, SelfProfileInput, WorkloadEstimateInput, ScheduleConfirmationInput, ScheduleChangeRequestInput, ScheduleChangeDecisionInput
 from app.services.auth import require_user
 from app.services.authorization import can, check
 from app.services.stage_planning import task_dict, validate_tasks, validate_student_limit, capacity
 from app.services.academic_scope import is_global, plan_term, program_semester, groups_for_cycle, groups_in_cycle
-from app.services.exam_weeks import normalize_exam_weeks, exam_weeks_from_config, exam_weeks_for
+from app.services.cohort_calendar import cohort_weeks, cohort_exam_weeks, cohort_start_dates, calendar_rule_payload
 from app.services.matching_weights import get_match_weights, weight_items, weights_total
 from app.services.workload import compute_teacher_workload
 from app.services.teacher_course_matching import score_candidate
 from app.services.personal_profile import require_personal_profile,missing_profile_fields,effective_profile
-from app.services.course_catalog import course_catalog_scope
+from app.services.course_catalog import course_catalog_scope, course_schedule_info
 from app.services.ai_explanation import generate_ai_advice
 from app.services.ai_config import LLMError, call_llm, resolve_config
 
@@ -60,7 +60,7 @@ def tasks_for(db, plan):
     rows = db.query(TeachingTask).filter_by(plan_id=plan.id).order_by(TeachingTask.id).all()
     tasks = [task_dict(db, task) for task in rows]
     if plan.state != 'published' and is_global(plan):
-        eligible = set(groups_for_cycle(db, plan.start_date, plan_term(plan)))
+        eligible = set(groups_for_cycle(db, plan.start_date, plan_term(plan), cohort_start_dates(db, plan)))
         from app.models.class_info import ClassInfo
         known = {row.name for row in db.query(ClassInfo)}
         tasks = [task for task in tasks if task.get('group') in eligible or task.get('group') not in known]
@@ -85,10 +85,15 @@ def can_read(user):
     return any(g['capability'] in {'admin', 'review', 'publish', 'teaching', 'lead'} for g in getattr(user,'grants',[]))
 
 
-def plan_info(plan):
+def plan_info(plan, db=None):
+    cohort_rules = {}
+    if db is not None:
+        from app.models.planning import CohortCalendarRule
+        cohort_rules = {row.cohort: calendar_rule_payload(row) for row in db.query(CohortCalendarRule)}
     return {'id':plan.id, 'name':plan.name, 'start_date':plan.start_date.isoformat(),
             'weeks':plan.weeks, 'deadline':plan.deadline.isoformat()+'Z', 'state':plan.state,
             'revision':plan.revision, 'rule_confirmed':plan.rule_confirmed, **(plan.settings or {}),
+            'cohort_calendar_rules':cohort_rules,
             'academic_year':f"{plan.start_date.year if plan.start_date.month>=8 else plan.start_date.year-1}—{plan.start_date.year+1 if plan.start_date.month>=8 else plan.start_date.year}",
             'academic_term':plan_term(plan), 'global_cycle':is_global(plan)}
 
@@ -103,17 +108,16 @@ def assigned_tasks(db, plan, teacher_id, exclude=None):
     for assignment in db.query(TeachingAssignment):
         if assignment.task_id == exclude or teacher_id not in assignment.teacher_ids: continue
         task = db.get(TeachingTask, assignment.task_id); other = db.get(AcademicPlan, task.plan_id)
-        from datetime import timedelta
         supersedes = (plan.settings or {}).get('supersedes_plan_id')
-        if other.id == plan.id or (other.id != supersedes and other.state == 'published' and other.start_date < plan.start_date+timedelta(weeks=plan.weeks)
-                and other.start_date+timedelta(weeks=other.weeks) > plan.start_date): chosen.append((task_dict(db,task),other))
+        if other.id == plan.id or (other.id != supersedes and other.state == 'published'):
+            chosen.append((task_dict(db,task),other))
     return chosen
 
 
 @router.get('/plans')
 def list_plans(user=Depends(require_user), db: Session=Depends(get_db)):
     if not can_read(user): raise HTTPException(403, '账号尚未授予工作职能')
-    return [plan_info(p) for p in db.query(AcademicPlan).order_by(AcademicPlan.id.desc())
+    return [plan_info(p, db) for p in db.query(AcademicPlan).order_by(AcademicPlan.id.desc())
             if p.state != 'draft' or can(user,'admin')]
 
 
@@ -128,14 +132,15 @@ def create_plan(data: PlanInput, user=Depends(require_user), db: Session=Depends
         if global_cycle:
             # 仅纳入标准八学期学制内的有效班级。
             settings.update({'global': True, 'term': data.term})
-            settings['groups']=groups_for_cycle(db,data.start_date,data.term)
+            calendar_dates={row.cohort:row.start_date for row in db.query(CohortCalendarRule)}
+            settings['groups']=groups_for_cycle(db,data.start_date,data.term,calendar_dates)
         else:
             settings.update(major=data.major,cohort=data.cohort,semester=data.semester)
         plan=AcademicPlan(name=data.name,start_date=data.start_date,weeks=data.weeks,
                           deadline=deadline.astimezone(timezone.utc).replace(tzinfo=None),rule_confirmed=data.rule_confirmed,
                           settings=settings)
         db.add(plan); db.flush(); event(db,user,'create_plan',data.model_dump(mode='json'),plan.id)
-        return plan_info(plan)
+        return plan_info(plan, db)
 
 
 @router.post('/plans/{plan_id}/generate')
@@ -147,11 +152,12 @@ def generate_tasks_from_course_catalog(plan_id: int, user=Depends(require_user),
         if plan.state != 'draft':
             raise HTTPException(409, '非草稿计划不能重新生成')
         settings = plan.settings or {}
+        start_dates = cohort_start_dates(db, plan)
         if is_global(plan):
-            scope = course_catalog_scope(db, plan.start_date, plan_term(plan), settings.get('groups') or None)
+            scope = course_catalog_scope(db, plan.start_date, plan_term(plan), settings.get('groups') or None,start_dates_by_cohort=start_dates)
         else:
             scope = course_catalog_scope(db, plan.start_date, plan_term(plan), settings.get('groups') or None,
-                settings.get('major'), settings.get('cohort'), settings.get('semester'))
+                settings.get('major'), settings.get('cohort'), settings.get('semester'),start_dates_by_cohort=start_dates)
         if not scope:
             raise HTTPException(409, '课程库中没有匹配本周期有效班级、专业、年级和上课学期的活动课程')
 
@@ -165,12 +171,15 @@ def generate_tasks_from_course_catalog(plan_id: int, user=Depends(require_user),
                 key = (course.course_code, cls.name)
                 if key in keys:
                     continue
+                info = course_schedule_info(course)
+                from app.models.planning import AcademicDirection
+                direction = db.get(AcademicDirection, course.direction_id) if course.direction_id else None
                 payload = {
                     'name': course.name,
                     'code': course.course_code,
                     'credits': course.credits,
-                    'required_hours': course.total_hours or course.semester_sessions * course.hours_per_session,
-                    'direction': '',
+                    'required_hours': info['total_hours'],
+                    'direction': direction.name if direction else '',
                     'tags': [],
                     'group': cls.name,
                     'class_name': cls.name,
@@ -196,8 +205,13 @@ def generate_tasks_from_course_catalog(plan_id: int, user=Depends(require_user),
                             'course_type': course.course_type,
                             'course_nature': course.course_nature,
                             'semester': course.semester,
-                            'teaching_weeks': course.teaching_weeks or course.semester_sessions,
-                            'weekly_hours': course.weekly_sessions * course.hours_per_session,
+                            'program_id': course.program_id,
+                            'direction_id': course.direction_id,
+                            'offering_unit_id': course.offering_unit_id,
+                            'teaching_weeks': info['teaching_weeks'],
+                            'weekdays': info['weekdays'],
+                            'weekly_hours': info['weekly_hours'],
+                            'tail_hours': course.tail_hours,
                         },
                     },
                 }
@@ -252,7 +266,7 @@ def get_state(plan_id: int, user=Depends(require_user), db: Session=Depends(get_
                 candidates.append({**c,'teacher_name':names.get(c['teacher_id'],'')})
     estimates={r.task_id:{**r.payload,'revision':r.revision} for r in db.query(TeacherWorkloadEstimate).filter_by(plan_id=plan.id,teacher_id=teacher_id)} if teacher_id else {}
     weights=get_match_weights(plan)
-    info={**deepcopy(snapshot.payload['plan']),'state':'published'} if snapshot else plan_info(plan)
+    info={**deepcopy(snapshot.payload['plan']),'state':'published'} if snapshot else plan_info(plan, db)
     if plan.state!='published' and is_global(plan):
         info['groups']=groups_in_cycle(db,plan)
     if any(g['capability']=='lead' for g in getattr(user,'grants',[])):
@@ -302,7 +316,10 @@ def _ai_context(db, plan, tasks):
         else:
             if task['end_week'] > plan.weeks:
                 add(task, 'span_out_of_range', f"周段 W{task['start_week']}—W{task['end_week']} 超出周期 {plan.weeks} 周")
-            exam = exam_weeks_for(plan, task.get('cohort'), task.get('group'), plan.weeks)
+            limit = cohort_weeks(db, plan, task.get('cohort'))
+            if task['end_week'] > limit:
+                add(task, 'span_out_of_range', f"周段 W{task['start_week']}—W{task['end_week']} 超出该年级{limit}周授课周期")
+            exam = cohort_exam_weeks(db, plan, task.get('cohort'), task.get('group'))
             blocked = sorted(exam & set(range(task['start_week'], task['end_week'] + 1)))
             if blocked:
                 add(task, 'exam_week', f"周段进入考试周（第{'、'.join(map(str, blocked))}周）")
@@ -446,7 +463,7 @@ def add_task(plan_id: int, data: TaskInput, user=Depends(require_user), db: Sess
             raise HTTPException(409,'同组同课程周段重复，请使用多人名额或不重叠的分段')
         payload=data.model_dump()
         from app.api.stage_designer import validate_spans
-        validate_spans(plan,[*tasks,payload])
+        validate_spans(plan,[*tasks,payload],db)
         validate_student_limit(db,payload)
         complete=[t for t in [*tasks,payload] if t.get('start_week') and t.get('slots')]
         if complete:validate_tasks(db,plan,complete)
@@ -477,7 +494,7 @@ def update_task(plan_id:int,task_id:int,data:TaskInput,user=Depends(require_user
             payload['source']=task.payload['source']
         from app.api.stage_designer import validate_spans
         all_others=[t for t in tasks_for(db,plan) if t['id']!=task_id]
-        validate_spans(plan,[*all_others,payload])
+        validate_spans(plan,[*all_others,payload],db)
         validate_student_limit(db,payload)
         others=[t for t in all_others if t.get('start_week') and t.get('slots')]
         complete=[t for t in [*others,payload] if t.get('slots')]
@@ -491,6 +508,18 @@ def update_task(plan_id:int,task_id:int,data:TaskInput,user=Depends(require_user
         return task_dict(db,task)
 
 
+def validate_task_room(db, payload, room_id):
+    if room_id is not None:
+        room=db.get(Classroom,room_id)
+        if not room:raise HTTPException(404,'地点不存在')
+        if not room.is_available:raise HTTPException(409,'地点已停用')
+        required_capacity=payload.get('max_students') or payload.get('student_count') or 0
+        if required_capacity and room.capacity < required_capacity:raise HTTPException(409,'地点容量小于课程人数上限')
+        if payload.get('room_type') and payload['room_type']!=room.room_type:
+            raise HTTPException(409,'地点类型不符合课程要求')
+
+
+
 @router.put('/plans/{plan_id}/tasks/{task_id}/limits')
 def set_task_limits(plan_id:int,task_id:int,data:TaskLimitsInput,user=Depends(require_user),db:Session=Depends(get_db)):
     check(user,'admin')
@@ -501,8 +530,15 @@ def set_task_limits(plan_id:int,task_id:int,data:TaskLimitsInput,user=Depends(re
         task=db.get(TeachingTask,task_id)
         if not task or task.plan_id!=plan.id:raise HTTPException(404,'任务不存在')
         payload={**task.payload,'teacher_count':data.teacher_count,'max_students':data.max_students}
+        if 'room_id' in data.model_fields_set:
+            payload['room_id'] = data.room_id
+        validate_task_room(db, payload, payload.get('room_id'))
         validate_student_limit(db,payload)
-        task.payload=payload;plan.revision+=1;db.flush()
+        task.payload=payload
+        db.flush()
+        complete=[t for t in tasks_for(db,plan) if t.get('start_week') and t.get('slots')]
+        if complete:validate_tasks(db,plan,complete)
+        plan.revision+=1
         event(db,user,'set_task_limits',{'task_id':task_id,**data.model_dump()},plan.id)
         return {'revision':plan.revision,'task':task_dict(db,task)}
 
@@ -522,14 +558,7 @@ def set_task_room(plan_id:int,task_id:int,data:RoomInput,user=Depends(require_us
         if not task or task.plan_id!=plan.id:raise HTTPException(404,'任务不存在')
         if not task.payload.get('start_week'):raise HTTPException(409,'任务尚未配置周段')
 
-        if data.room_id is not None:
-            room=db.get(Classroom,data.room_id)
-            if not room:raise HTTPException(404,'地点不存在')
-            if not room.is_available:raise HTTPException(409,'地点已停用')
-            required_capacity=task.payload.get('max_students') or task.payload.get('student_count') or 0
-            if required_capacity and room.capacity < required_capacity:raise HTTPException(409,'地点容量小于课程人数上限')
-            if task.payload.get('room_type') and task.payload['room_type']!=room.room_type:
-                raise HTTPException(409,'地点类型不符合课程要求')
+        validate_task_room(db, task.payload, data.room_id)
 
         task.payload={**task.payload,'room_id':data.room_id}
         # SessionLocal 关闭了 autoflush，必须显式 flush 才能让校验读到新地点
@@ -569,12 +598,12 @@ def open_plan(plan_id: int,user=Depends(require_user),db: Session=Depends(get_db
         if plan.deadline<=datetime.now(timezone.utc).replace(tzinfo=None): raise HTTPException(409,'申报截止时间已过')
         # 开放填报只确认阶段任务；精确节次、学时与地点在正式发布时校验。
         from app.api.stage_designer import validate_spans
-        validate_spans(plan,tasks)
+        validate_spans(plan,tasks,db)
         for task in tasks:validate_student_limit(db,task)
         if any(not isinstance(t.get('required_hours'),int) or t['required_hours']<=0 for t in tasks):
             raise HTTPException(409,'请先核对课程计划学时')
         plan.state='open';event(db,user,'open',{},plan.id)
-        return plan_info(plan)
+        return plan_info(plan, db)
 
 
 def editable(plan):
@@ -643,27 +672,6 @@ def submit(plan_id:int,data:SubmitInput,user=Depends(require_user),db:Session=De
         row=PreferenceSubmission(plan_id=plan.id,teacher_id=tid,task_ids=list(draft.task_ids),plan_revision=plan.revision,draft_revision=draft.revision)
         db.add(row);db.flush();event(db,user,'submit',{'teacher_id':tid,'task_ids':draft.task_ids},plan.id)
         return {'id':row.id,'task_ids':row.task_ids}
-
-
-@router.put('/plans/{plan_id}/exam-weeks')
-def set_exam_weeks(plan_id:int,data:ExamWeeksInput,user=Depends(require_user),db:Session=Depends(get_db)):
-    """按年级/教学组设置考试周；未配置的年级沿用最后一周考试。"""
-    check(user,'admin')
-    with write(db):
-        plan=get_plan(db,plan_id)
-        if plan.state=='published':raise HTTPException(409,'已发布周期的考试周已冻结')
-        try:normalized=normalize_exam_weeks(data.exam_weeks,plan.weeks)
-        except ValueError as e:raise HTTPException(422,str(e))
-        conflicts=[]
-        for task in tasks_for(db,plan):
-            if not task.get('start_week') or not task.get('end_week'):continue
-            exam=exam_weeks_from_config(normalized,plan.settings,task.get('cohort'),task.get('group'),plan.weeks)
-            blocked=sorted(exam & set(range(task['start_week'],task['end_week']+1)))
-            if blocked:conflicts.append(f"{task['name']}（{task['group']}）第{'、'.join(map(str,blocked))}周")
-        if conflicts:raise HTTPException(409,'以下课程已排入考试周，请先调整周段：'+'；'.join(conflicts))
-        plan.settings={**(plan.settings or {}),'exam_weeks':normalized}
-        db.flush();event(db,user,'set_exam_weeks',normalized,plan.id)
-        return {'exam_weeks':normalized}
 
 
 @router.put('/plans/{plan_id}/match-weights')
@@ -967,7 +975,7 @@ def publish(plan_id:int,user=Depends(require_user),db:Session=Depends(get_db)):
         # 发布只校验周段、地点、教师与教学组约束；周内节次为可选项，不要求也不校验。
         from app.api.stage_designer import validate_spans
         validate_tasks(db,plan,tasks,check_slots=False)
-        validate_spans(plan,tasks)
+        validate_spans(plan,tasks,db)
         if not tasks or any(not t['locked'] or len(t['teacher_ids'])!=t['teacher_count'] or not t.get('room_id') for t in tasks):
             raise HTTPException(409,'尚有教师待审核或地点未落实')
         for task in tasks:
@@ -976,7 +984,7 @@ def publish(plan_id:int,user=Depends(require_user),db:Session=Depends(get_db)):
                 if reasons:raise HTTPException(409,'；'.join(reasons))
         names={t.id:t.name for t in db.query(Teacher)}
         for task in tasks:task['teacher_names']=[names.get(t,'') for t in task['teacher_ids']]
-        plan.state='published';snapshot={'plan':plan_info(plan),'tasks':tasks}
+        plan.state='published';snapshot={'plan':plan_info(plan, db),'tasks':tasks}
         db.add(PublishedPlan(plan_id=plan.id,payload=snapshot));event(db,user,'publish',snapshot,plan.id)
         return {'success':True}
 

@@ -116,12 +116,14 @@ def groups_for_curriculum(db, major: str, cohort: str, allowed: list[str] | None
     return names
 
 
-def groups_for_cycle(db, start_date, term: int) -> list[str]:
+def groups_for_cycle(db, start_date, term: int, start_dates_by_cohort=None) -> list[str]:
     """按标准八学期学制筛选当前仍在读的有效班级。"""
     from app.models.class_info import ClassInfo
+    from app.services.cohort_calendar import normalize_cohort
+    cohort_dates = start_dates_by_cohort or {}
     return [row.name for row in db.query(ClassInfo).filter(ClassInfo.is_active.is_(True)).order_by(
         ClassInfo.grade, ClassInfo.department, ClassInfo.name)
-        if 1 <= (program_semester(start_date, term, row.grade) or 0) <= MAX_UNDERGRADUATE_SEMESTER]
+        if 1 <= (program_semester(cohort_dates.get(normalize_cohort(row.grade), start_date), term, row.grade) or 0) <= MAX_UNDERGRADUATE_SEMESTER]
 
 
 def groups_in_cycle(db, plan) -> list[str]:
@@ -129,6 +131,7 @@ def groups_in_cycle(db, plan) -> list[str]:
     from app.models.class_info import ClassInfo
 
     settings = getattr(plan, 'settings', None) or {}
-    eligible = set(groups_for_cycle(db, plan.start_date, plan_term(plan)))
+    from app.services.cohort_calendar import cohort_start_dates
+    eligible = set(groups_for_cycle(db, plan.start_date, plan_term(plan), cohort_start_dates(db, plan)))
     known = {row.name for row in db.query(ClassInfo)}
     return [group for group in settings.get('groups', []) if group in eligible or group not in known]

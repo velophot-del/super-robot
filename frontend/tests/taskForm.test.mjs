@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-test('task settings send only teacher count, student limit and revision',async()=>{
+test('task settings send only teacher count, student limit, optional room and revision',async()=>{
   const {taskLimitsPayload}=await import('../src/lib/taskForm.ts');
   const result=taskLimitsPayload({teacher_count:2,max_students:45,name:'Tampered',start_week:9,end_week:19,tail_weeks:2,student_count:99,room_id:null},3);
-  assert.deepEqual(result,{revision:3,teacher_count:2,max_students:45});
+  assert.deepEqual(result,{revision:3,teacher_count:2,max_students:45,room_id:null});
 });
 
 test('read-only course info uses imported metadata rather than changed task fields',async()=>{

@@ -6,7 +6,7 @@ import dayjs from 'dayjs';
 import { useAuth } from '../contexts/AuthContext';
 import { can } from '../lib/accessPolicy';
 import { planningApi as api } from '../api/planning';
-import { classApi } from '../api/client';
+import { classApi, classroomApi } from '../api/client';
 import ProfessionalExport from '../components/ProfessionalExport';
 import TeacherSelectionPage from './TeacherSelectionPage';
 import { taskLimitsPayload, taskCourseInfo } from '../lib/taskForm';
@@ -20,6 +20,12 @@ const { Title, Text, Paragraph } = Typography;
 const stateNames: Record<string,string> = { draft:'计划草稿', open:'开放填报', matched:'匹配待审核', published:'已发布' };
 const textList = (s: string | string[]) => Array.isArray(s) ? s : (s || '').split(/[,，\n]/).map(x => x.trim()).filter(Boolean);
 
+async function loadAllClasses(){
+  const rows:any[]=[];let skip=0;
+  while(skip<10000){const page=await classApi.list({skip,limit:500}) as any[];rows.push(...page);if(page.length<500)break;skip+=page.length;}
+  return rows;
+}
+
 export function ManagementPlanningWorkspace({section='plan'}:{section?:'plan'|'review'}={}) {
   const { user }=useAuth();
   const admin=can(user,'admin'), review=can(user,'review');
@@ -30,6 +36,8 @@ export function ManagementPlanningWorkspace({section='plan'}:{section?:'plan'|'r
   const [planInfoOpen,setPlanInfoOpen]=useState(false);
   const [modal,setModal]=useState<'plan'|'task'|'profile'|null>(null), [profileId,setProfileId]=useState<number>();
   const [editingTask,setEditingTask]=useState<any>();
+  const [rooms,setRooms]=useState<any[]>([]);
+  const [roomsLoading,setRoomsLoading]=useState(false);
   const [form]=Form.useForm();
   const calendarStart=Form.useWatch('start_date',form);
   const calendarWeeks=Form.useWatch('weeks',form);
@@ -46,7 +54,7 @@ export function ManagementPlanningWorkspace({section='plan'}:{section?:'plan'|'r
       const list=await api.plans();setPlans(list);
       const target=id ?? list[0]?.id;
       if(target) { if(!id)setId(target); setState(await api.state(target,section==='review'&&!admin)); } else setState(undefined);
-      if(admin){ const [p,c]=await Promise.all([api.profiles(),classApi.list({limit:500})]);setProfiles(p);setClasses(c); }
+      if(admin){ const [p,c]=await Promise.all([api.profiles(),loadAllClasses()]);setProfiles(p);setClasses(c); }
     }catch(e){setError(e instanceof Error?e.message:'加载失败');}finally{setLoading(false);}
   },[id,admin,section]);
   useEffect(()=>{void load();},[load]);
@@ -74,7 +82,12 @@ export function ManagementPlanningWorkspace({section='plan'}:{section?:'plan'|'r
     form.resetFields();setModal(type);setProfileId(p?.id);
     setEditingTask(type==='task'?p:undefined);
     if(type==='plan')form.setFieldsValue({weeks:20,term:(dayjs().month()>=7||dayjs().month()===0)?1:2,rule_confirmed:false,groups:[]});
+    if(type==='task'){
+      setRoomsLoading(true);
+      void classroomApi.list({limit:500}).then((data:any)=>setRooms(data)).catch(()=>message.error('教室列表加载失败，请重试')).finally(()=>setRoomsLoading(false));
+    }
     if(type==='task'&&p)form.setFieldsValue({
+      room_id:p.room_id??null,
       teacher_count:p.teacher_count??1,
       max_students:p.max_students??30,
     });
@@ -181,7 +194,7 @@ export function ManagementPlanningWorkspace({section='plan'}:{section?:'plan'|'r
           <Form.Item name="rule_confirmed" valuePropName="checked"><Checkbox>已核对以上匹配规则，允许本周期运行匹配</Checkbox></Form.Item>
         </>}
         {modal==='task'&&editingTask&&<>
-          <Alert type="info" showIcon title="课程基础信息按课程库只读展示" description="课程名称、编码、学分和学时请在课程管理中维护；周段由课表编排确定，此处设置教师人数与学生上限。" style={{marginBottom:16}}/>
+          <Alert type="info" showIcon title="课程基础信息按课程库只读展示" description="课程名称、编码、学分和学时请在课程管理中维护；周段由课表编排确定，此处设置教师人数、学生上限和上课地点。" style={{marginBottom:16}}/>
           <Descriptions bordered size="small" column={2} items={[
             ...([['name','课程名称'],['code','课程编码'],['credits','学分'],['required_hours','计划学时'],['category','课程性质'],['department','所属专业'],['group','教学组']] as const).map(([key,label])=>({key,label,children:taskCourseInfo(editingTask)[key]??'未注明'})),
             {key:'actual_students',label:'实际选课人数',children:Number(editingTask.actual_student_count)>0?`${editingTask.actual_student_count}人`:'待学生选课结束后统计'},
@@ -190,6 +203,9 @@ export function ManagementPlanningWorkspace({section='plan'}:{section?:'plan'|'r
             <Col span={12}><Form.Item name="teacher_count" label="教师人数" rules={[{required:true}]}><InputNumber min={1} max={5} style={{width:'100%'}}/></Form.Item></Col>
             <Col span={12}><Form.Item name="max_students" label="学生上限" rules={[{required:true}]} extra="仅设置课程人数上限；实际学生数待排课完成、学生选课结束后统计。"><InputNumber min={1} max={10000} style={{width:'100%'}}/></Form.Item></Col>
           </Row>
+          <Form.Item name="room_id" label="上课地点" extra="从教室管理选择，可暂不分配。">
+            <Select allowClear showSearch optionFilterProp="label" loading={roomsLoading} placeholder="选择教室" options={rooms.map(room=>({value:room.id,disabled:!room.is_available,label:`${[room.building,room.floor!=null?`${room.floor}层`:null,room.name].filter(Boolean).join(' · ')}（${room.capacity}人）${room.is_available?'':' · 已停用'}`}))}/>
+          </Form.Item>
         </>}
         {modal==='profile'&&<>
           <Alert type="info" title="教师自填专业资料优先用于匹配；此处维护团队、曾授和负荷记录，不能覆盖教师个人资料。"/><Form.Item name="direction" label="管理登记方向（未自填时使用）"><Input/></Form.Item><Form.Item name="tags" label="管理登记领域（未自填时使用）"><Input/></Form.Item>

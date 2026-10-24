@@ -159,6 +159,9 @@ export const ioApi = {
   previewCoursesXlsx: (file:File, cohort?: string) => {const form=new FormData();form.append('file',file);if(cohort)form.append('cohort',cohort);return apiClient.post('/io/xlsx/courses/preview',form,{headers:{'Content-Type':'multipart/form-data'}});},
   confirmCoursesXlsx: (preview_id:number,token:string) => apiClient.post('/io/xlsx/courses/confirm',{preview_id,token}),
   downloadCoursesXlsxTemplate: () => apiClient.get('/io/template/courses/xlsx',{responseType:'blob'}),
+  previewAcademicCatalogXlsx: (file:File) => {const form=new FormData();form.append('file',file);return apiClient.post('/io/xlsx/academic-catalog/preview',form,{headers:{'Content-Type':'multipart/form-data'}});},
+  confirmAcademicCatalogXlsx: (preview_id:number,token:string) => apiClient.post('/io/xlsx/academic-catalog/confirm',{preview_id,token}),
+  downloadAcademicCatalogXlsxTemplate: () => apiClient.get('/io/xlsx/academic-catalog/template',{responseType:'blob'}),
   exportExcel: (version?: string) =>
     apiClient.get('/io/export/excel', { params: { version }, responseType: 'blob' }),
   exportPdf: (version?: string, viewType?: string) =>

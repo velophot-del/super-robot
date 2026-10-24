@@ -108,8 +108,15 @@ def build_word_timetable(batches,major,prepared_on=None):
     left=grid_widths[:3];total=sum(grid_widths[3:])
     grouped=defaultdict(list)
     for batch in batches:
-        p=batch['plan'];key=(p.get('cohort') or '未设置年级',p['start_date'],p['weeks'],p.get('semester',1))
-        grouped[key].append(batch)
+        p=batch['plan'];calendar_rules=p.get('cohort_calendar_rules') or {}
+        by_cohort=defaultdict(list)
+        for task in batch['tasks']:
+            cohort=task.get('cohort') or p.get('cohort') or '未设置年级'
+            by_cohort[cohort].append(task)
+        for cohort,tasks in by_cohort.items():
+            rule=calendar_rules.get(str(cohort).removesuffix('级').removesuffix('届')) or {}
+            key=(cohort,rule.get('start_date') or p['start_date'],min(int(rule.get('weeks') or p['weeks']),int(p['weeks'])),p.get('semester',1))
+            grouped[key].append({'plan':p,'tasks':tasks})
     page_index=0
     for key,group in sorted(grouped.items(),key=lambda item:str(item[0])):
         plan=group[0]['plan'];weeks=plan['weeks'];start=date.fromisoformat(plan['start_date'])

@@ -20,34 +20,56 @@ def build_visual_excel(batches, title):
     ws.title = f'{weeks}周课表'
     ws.sheet_view.showGridLines = False
     ws.merge_cells(f'A1:{last_col}1'); ws['A1'] = title
-    start = date.fromisoformat(batches[0]['plan']['start_date'])
+    start_dates = set()
+    for batch in batches:
+        plan=batch['plan'];rules=plan.get('cohort_calendar_rules') or {}
+        for task in batch['tasks']:
+            cohort=str(task.get('cohort') or plan.get('cohort') or '未注明').removesuffix('级').removesuffix('届')
+            rule=rules.get(cohort) or {}
+            start_dates.add(rule.get('start_date') or plan['start_date'])
+    if not start_dates:
+        start_dates.add(batches[0]['plan']['start_date'])
+    start = date.fromisoformat(next(iter(start_dates)) if len(start_dates)==1 else batches[0]['plan']['start_date'])
     ws.merge_cells(f'A2:{last_col}2')
     openings = {b['plan'].get('opening_date') or '未登记' for b in batches}
     opening_label = next(iter(openings)) if len(openings) == 1 else '各计划不同，详见课程明细'
-    ws['A2'] = f"开学日期：{opening_label} · 第1教学周周一：{start.isoformat()} · 共{weeks}周 · 考试周按年级设置 · 仅含已发布课程"
+    ws['A2'] = f"开学日期：{opening_label} · 周历按年级规则设置，详见“年级周历”工作表 · 共{weeks}周 · 仅含已发布课程"
     for col, label in enumerate(['专业', '年级', '教学组 / 班级'], 1):
         ws.cell(3, col, label); ws.merge_cells(start_row=3, end_row=4, start_column=col, end_column=col)
     for week in range(1, weeks + 1):
         col = week + 3
         ws.cell(3, col, f'第{week}周')
-        begin = start + timedelta(weeks=week-1); end = begin + timedelta(days=6)
-        ws.cell(4, col, f'{begin.month}.{begin.day}—{end.month}.{end.day}')
+        if len(start_dates)==1:
+            begin = start + timedelta(weeks=week-1); end = begin + timedelta(days=6)
+            ws.cell(4, col, f'{begin.month}.{begin.day}—{end.month}.{end.day}')
+        else:
+            ws.cell(4, col, '按年级周历')
         ws.column_dimensions[get_column_letter(col)].width = 15
     for col, width in [('A', 20), ('B', 12), ('C', 24)]:
         ws.column_dimensions[col].width = width
     groups = defaultdict(list); group_plan = {}
     details = wb.create_sheet('课程明细')
-    details.append(['课程名称','课程编码','教学组','学分','计划学时','起始周','结束周','周内分布','地点','任课教师','来源版本','专业','年级','周期','发布快照','开学日期'])
+    details.append(['课程名称','课程编码','教学组','学分','计划学时','起始周','结束周','周内分布','地点','任课教师','来源版本','专业','年级','周期','发布快照','开学日期','第1教学周周一'])
+    calendars = wb.create_sheet('年级周历')
+    calendars.append(['年级','教学周','日期范围','课程开始日期','授课周期','考试周'])
+    calendar_rows=set()
     for batch in batches:
         plan = batch['plan']
         for task in batch['tasks']:
             task_major=task.get('major') or plan.get('major') or '未注明专业'
             task_cohort=str(task.get('cohort') or plan.get('cohort') or '未注明')
+            cohort_rule=(plan.get('cohort_calendar_rules') or {}).get(task_cohort.removesuffix('级').removesuffix('届')) or {}
+            cohort_start=date.fromisoformat(cohort_rule.get('start_date') or plan['start_date'])
+            cohort_weeks=min(int(cohort_rule.get('weeks') or plan.get('weeks') or weeks),int(plan.get('weeks') or weeks))
+            cohort_exam=sorted(cohort_rule.get('exam_weeks') or [])
             group_key=(task_major,task_cohort,task['group'])
             groups[group_key].append(task); group_plan[group_key]=plan
             details.append([task['name'],task['code'],task['group'],task['credits'],task['required_hours'],task['start_week'],task['end_week'],
                 '；'.join(f"{'尾段 ' if s.get('phase')=='tail' else ''}周{s['day']} 第{s['start']}—{s['start']+s['count']-1}节" for s in task.get('slots',[])),
-                task.get('room_name',''),'、'.join(task.get('teacher_names',[])),str(task.get('source',{})),task_major,grade_label(task_cohort),plan.get('name',''),batch.get('snapshot_id'),plan.get('opening_date') or '未登记'])
+                task.get('room_name',''),'、'.join(task.get('teacher_names',[])),str(task.get('source',{})),task_major,grade_label(task_cohort),plan.get('name',''),batch.get('snapshot_id'),plan.get('opening_date') or '未登记',cohort_start.isoformat()])
+            for week in range(1,cohort_weeks+1):
+                begin=cohort_start+timedelta(weeks=week-1);end=begin+timedelta(days=6)
+                calendar_rows.add((task_cohort,week,f'{begin.isoformat()}—{end.isoformat()}',cohort_start.isoformat(),cohort_weeks,'是' if week in cohort_exam else ''))
     row = 5
     for (major, cohort, group), tasks in sorted(groups.items()):
         # Parallel courses use separate lanes so narrow single-week cells remain legible.
@@ -58,7 +80,9 @@ def build_visual_excel(batches, title):
             lane.append(task)
         first = row
         plan_for_group=group_plan.get((major,cohort,group),batches[0]['plan'])
-        exam=exam_weeks_for(plan_for_group,None if cohort=='未注明' else cohort,group,weeks)
+        rule=(plan_for_group.get('cohort_calendar_rules') or {}).get(str(cohort).removesuffix('级').removesuffix('届')) or {}
+        grade_weeks=min(int(rule.get('weeks') or weeks),int(plan_for_group.get('weeks') or weeks))
+        exam=exam_weeks_for(plan_for_group,None if cohort=='未注明' else cohort,group,weeks)|set(range(grade_weeks+1,weeks+1))
         for lane in lanes:
             height = 110
             for begin, end, lines in stage_runs(lane, weeks, exam):
@@ -75,6 +99,7 @@ def build_visual_excel(batches, title):
             ws.cell(first,col,label)
             if row-1>first:ws.merge_cells(start_row=first,end_row=row-1,start_column=col,end_column=col)
     line = Side(style='thin',color='D4D8E2')
+    for item in sorted(calendar_rows):calendars.append(list(item))
     for sheet in wb:
         for cells in sheet:
             for cell in cells:
@@ -91,8 +116,10 @@ def build_visual_excel(batches, title):
     ws.row_dimensions[1].height=36;ws.row_dimensions[2].height=26
     ws.row_dimensions[3].height=28;ws.row_dimensions[4].height=24
     ws.freeze_panes='D5';ws.print_title_rows='1:4';ws.print_title_cols='A:C';ws.print_area=f'A1:{last_col}{max(row-1,4)}'
-    for col in range(1,17):details.column_dimensions[get_column_letter(col)].width=24 if col not in [8,11] else 48
+    for col in range(1,18):details.column_dimensions[get_column_letter(col)].width=24 if col not in [8,11] else 48
     for cell in details[1]:cell.fill=PatternFill('solid',fgColor='E4E9F4');cell.font=Font(name='微软雅黑',bold=True,size=11)
     for r in range(2,details.max_row+1):details.row_dimensions[r].height=60
     details.freeze_panes='D2';details.auto_filter.ref=details.dimensions;details.print_title_rows='1:1'
+    for cell in calendars[1]:cell.fill=PatternFill('solid',fgColor='E4E9F4');cell.font=Font(name='微软雅黑',bold=True,size=11)
+    calendars.freeze_panes='A2';calendars.auto_filter.ref=calendars.dimensions
     output=BytesIO();wb.save(output);return output.getvalue()

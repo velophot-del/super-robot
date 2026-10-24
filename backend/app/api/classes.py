@@ -9,6 +9,7 @@ from app.models.schedule import ScheduleEntry
 from app.models.course import Course
 from app.models.teacher import Teacher
 from app.models.planning import AcademicProgram
+from app.services.course_catalog import course_schedule_info
 from app.services.schedule_versions import resolve_schedule_version
 from app.schemas.class_info import ClassInfoCreate, ClassInfoUpdate, ClassInfoResponse
 
@@ -60,14 +61,16 @@ def get_class_courses(class_id: int, version: str = Query(None), db: Session = D
         cid = entry.course_id
         if cid not in course_map:
             course = db.query(Course).filter(Course.id == cid).first()
+            info = course_schedule_info(course) if course else {
+                'teaching_weeks': 0, 'weekdays': [], 'total_hours': 0, 'weekly_hours': 0}
             course_map[cid] = {
                 "course_id": cid,
                 "course_name": course.name if course else "",
                 "course_code": course.course_code if course else "",
-                "semester_sessions": course.semester_sessions if course else 0,
-                "weekly_sessions": course.weekly_sessions if course else 0,
-                "hours_per_session": course.hours_per_session if course else 0,
-                "total_hours": course.total_hours if course else None,
+                "teaching_weeks": info['teaching_weeks'],
+                "weekdays": info['weekdays'],
+                "total_hours": info['total_hours'],
+                "weekly_hours": info['weekly_hours'],
                 "teachers": set(),
                 "time_slots": 0,
             }
@@ -83,14 +86,14 @@ def get_class_courses(class_id: int, version: str = Query(None), db: Session = D
             "course_id": info["course_id"],
             "course_name": info["course_name"],
             "course_code": info["course_code"],
-            "semester_sessions": info["semester_sessions"],
-            "weekly_sessions": info["weekly_sessions"],
-            "hours_per_session": info["hours_per_session"],
+            "teaching_weeks": info["teaching_weeks"],
+            "weekdays": info["weekdays"],
             "total_hours": info["total_hours"],
+            "weekly_hours": info["weekly_hours"],
             "teacher_names": list(info["teachers"]),
             "time_slots": info["time_slots"],
         })
-        total += info["weekly_sessions"]
+        total += info["weekly_hours"]
 
     return {
         "class_id": class_id, "class_name": cls.name,
@@ -119,6 +122,9 @@ def create_class(data: ClassInfoCreate, db: Session = Depends(get_db)):
     if not values.get('program_id') and values.get('department'):
         program=db.query(AcademicProgram).filter_by(name=values['department']).first()
         if program:values['program_id']=program.id
+        else:raise HTTPException(422,'所属专业不在管理员专业目录中，请先维护专业目录')
+    if values.get('program_id'):
+        values['department']=db.get(AcademicProgram,values['program_id']).name
     cls = ClassInfo(**values)
     db.add(cls)
     db.commit()
@@ -134,6 +140,17 @@ def update_class(class_id: int, data: ClassInfoUpdate, db: Session = Depends(get
         raise HTTPException(status_code=404, detail="班级不存在")
     update_data = data.model_dump(exclude_unset=True)
     if 'program_id' in update_data:validate_program(db,update_data['program_id'])
+    if 'department' in update_data and 'program_id' not in update_data and update_data['department']:
+        program=db.query(AcademicProgram).filter_by(name=update_data['department'].strip()).first()
+        if not program:raise HTTPException(422,'所属专业不在管理员专业目录中，请先维护专业目录')
+        update_data['program_id']=program.id
+    elif 'department' in update_data and not update_data['department'] and 'program_id' not in update_data:
+        update_data['program_id']=None
+    program_id=update_data.get('program_id',cls.program_id)
+    if program_id:
+        update_data['department']=db.get(AcademicProgram,program_id).name
+    elif 'program_id' in update_data and update_data['program_id'] is None:
+        update_data['department']=None
     for key, value in update_data.items():
         setattr(cls, key, value)
     db.commit()
