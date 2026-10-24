@@ -81,6 +81,7 @@ class TaskLimitsInput(BaseModel):
     revision: int = Field(ge=1)
     teacher_count: int = Field(ge=1, le=5)
     max_students: int = Field(ge=1, le=10000)
+    room_id: int | None = Field(default=None, ge=1)
 
 
 class RoomInput(BaseModel):

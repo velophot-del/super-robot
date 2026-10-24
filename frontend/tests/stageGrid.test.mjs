@@ -53,9 +53,9 @@ test('clicking a placed course title invokes the task editor callback',async()=>
 
 test('stage cards show an assigned room or an unassigned label',async()=>{
   const {stageRoomLabel}=await import('../src/lib/adminStageGrid.ts');
-  assert.equal(stageRoomLabel('设计楼 302'), '设计楼 302');
-  assert.equal(stageRoomLabel(null), '未分配');
-  assert.equal(stageRoomLabel('  '), '未分配');
+  assert.equal(stageRoomLabel('设计楼 302'), '上课地点：设计楼 302');
+  assert.equal(stageRoomLabel(null), '未分配教室');
+  assert.equal(stageRoomLabel('  '), '未分配教室');
 });
 
 test('stage filters use curriculum task scope and fall back to class records',async()=>{

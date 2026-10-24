@@ -508,6 +508,18 @@ def update_task(plan_id:int,task_id:int,data:TaskInput,user=Depends(require_user
         return task_dict(db,task)
 
 
+def validate_task_room(db, payload, room_id):
+    if room_id is not None:
+        room=db.get(Classroom,room_id)
+        if not room:raise HTTPException(404,'地点不存在')
+        if not room.is_available:raise HTTPException(409,'地点已停用')
+        required_capacity=payload.get('max_students') or payload.get('student_count') or 0
+        if required_capacity and room.capacity < required_capacity:raise HTTPException(409,'地点容量小于课程人数上限')
+        if payload.get('room_type') and payload['room_type']!=room.room_type:
+            raise HTTPException(409,'地点类型不符合课程要求')
+
+
+
 @router.put('/plans/{plan_id}/tasks/{task_id}/limits')
 def set_task_limits(plan_id:int,task_id:int,data:TaskLimitsInput,user=Depends(require_user),db:Session=Depends(get_db)):
     check(user,'admin')
@@ -518,8 +530,15 @@ def set_task_limits(plan_id:int,task_id:int,data:TaskLimitsInput,user=Depends(re
         task=db.get(TeachingTask,task_id)
         if not task or task.plan_id!=plan.id:raise HTTPException(404,'任务不存在')
         payload={**task.payload,'teacher_count':data.teacher_count,'max_students':data.max_students}
+        if 'room_id' in data.model_fields_set:
+            payload['room_id'] = data.room_id
+        validate_task_room(db, payload, payload.get('room_id'))
         validate_student_limit(db,payload)
-        task.payload=payload;plan.revision+=1;db.flush()
+        task.payload=payload
+        db.flush()
+        complete=[t for t in tasks_for(db,plan) if t.get('start_week') and t.get('slots')]
+        if complete:validate_tasks(db,plan,complete)
+        plan.revision+=1
         event(db,user,'set_task_limits',{'task_id':task_id,**data.model_dump()},plan.id)
         return {'revision':plan.revision,'task':task_dict(db,task)}
 
@@ -539,14 +558,7 @@ def set_task_room(plan_id:int,task_id:int,data:RoomInput,user=Depends(require_us
         if not task or task.plan_id!=plan.id:raise HTTPException(404,'任务不存在')
         if not task.payload.get('start_week'):raise HTTPException(409,'任务尚未配置周段')
 
-        if data.room_id is not None:
-            room=db.get(Classroom,data.room_id)
-            if not room:raise HTTPException(404,'地点不存在')
-            if not room.is_available:raise HTTPException(409,'地点已停用')
-            required_capacity=task.payload.get('max_students') or task.payload.get('student_count') or 0
-            if required_capacity and room.capacity < required_capacity:raise HTTPException(409,'地点容量小于课程人数上限')
-            if task.payload.get('room_type') and task.payload['room_type']!=room.room_type:
-                raise HTTPException(409,'地点类型不符合课程要求')
+        validate_task_room(db, task.payload, data.room_id)
 
         task.payload={**task.payload,'room_id':data.room_id}
         # SessionLocal 关闭了 autoflush，必须显式 flush 才能让校验读到新地点

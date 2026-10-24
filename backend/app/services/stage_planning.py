@@ -14,6 +14,7 @@ def task_dict(db, task):
                       for s in db.query(PeriodSlot).filter_by(task_id=task.id).order_by(PeriodSlot.day)],
             'teacher_ids': assignment.teacher_ids if assignment else [],
             'locked': bool(assignment and assignment.locked),'room_name':room.name if room else None,
+            'room_address':' · '.join(str(v) for v in [room.building, f'{room.floor}层' if room.floor is not None else None, room.name] if v) if room else None,
             # 实际选课人数在排课完成、学生选课结束后回填；未回填时为 0。
             'actual_student_count':task_student_count(task.payload)}
 

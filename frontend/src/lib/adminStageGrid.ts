@@ -57,7 +57,8 @@ export function stageTaskEditAction<T>(task:T,onEdit:(task:T)=>void):()=>void{
 }
 
 export function stageRoomLabel(value:unknown):string{
-  return String(value??'').trim()||'未分配';
+  const address=String(value??'').trim();
+  return address?`上课地点：${address}`:'未分配教室';
 }
 
 export function stageClassScope(group:string,classes:{name:string;grade?:string;department?:string}[],tasks:{group:string;cohort?:string;major?:string;department?:string}[]):{cohort:string;major:string}{
