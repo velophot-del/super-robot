@@ -2,7 +2,7 @@ import unittest
 from datetime import date,datetime
 import test_debug_mode
 from app.models.classroom import Classroom
-from app.models.planning import AcademicPlan,MatchRun,TeachingAssignment,TeachingTask
+from app.models.planning import AcademicPlan,AutoSchedulePreview,MatchRun,TeachingAssignment,TeachingTask
 from app.models.planning import PeriodSlot
 
 
@@ -74,6 +74,61 @@ class AutoScheduleTests(unittest.IsolatedAsyncioTestCase):
         repeated=await self.client.post('/api/planning/plans/1/auto-schedule/apply',headers=headers,
             json={'preview_id':candidate['preview_id']})
         self.assertEqual(repeated.status_code,409)
+
+    async def test_ai_draft_preview_uses_curriculum_priority_without_writing_timetable(self):
+        self.db.add(Classroom(id=1,name='R101',room_code='R101',capacity=40,room_type='普通教室',is_available=True))
+        plan=AcademicPlan(id=3,name='AI draft',start_date=date(2026,2,2),weeks=20,
+            deadline=datetime(2026,1,1),state='matched',settings={'groups':['G']})
+        self.db.add(plan);self.db.flush();self.db.add(MatchRun(id=3,plan_id=3,payload={'plan_revision':1}))
+        task=TeachingTask(id=3,plan_id=3,payload={'name':'Typography','code':'T1','group':'G','class_name':'G',
+            'cohort':'2026','major':'视觉传达设计','required_hours':4,'start_week':1,'end_week':2,'tail_weeks':0,
+            'teacher_count':1,'max_students':30,'room_id':None,'room_type':'','slots':[],
+            'source':{'course_id':3,'major':'视觉传达设计','course_metadata':{'semester':2,'course_type':'专业课',
+                'weekly_hours':2,'teaching_weeks':2,'hours_per_session':2}}})
+        self.db.add(task);self.db.flush()
+        self.db.add(TeachingAssignment(task_id=3,teacher_ids=[7],match_id=3,locked=True));self.db.commit()
+        headers={'Authorization':'Bearer '+(await self.client.post('/api/debug/session',json={'role':'admin'})).json()['access_token']}
+        preview=await self.client.post('/api/planning/plans/3/auto-schedule/ai-draft/preview',headers=headers,json={})
+        self.assertEqual(preview.status_code,200,preview.text)
+        body=preview.json()
+        self.assertEqual(body['draft_source'],'rules')
+        self.assertEqual(body['tasks'][0]['major'],'视觉传达设计')
+        self.assertEqual(body['tasks'][0]['semester'],2)
+        self.assertEqual(self.db.query(PeriodSlot).filter_by(task_id=3).count(),0)
+        self.assertIsNone(self.db.get(TeachingTask,3).payload['room_id'])
+
+    async def test_one_click_ai_schedule_applies_draft_to_timetable(self):
+        self.db.add(Classroom(id=1,name='R101',room_code='R101',capacity=40,room_type='普通教室',is_available=True))
+        plan=AcademicPlan(id=4,name='AI one click',start_date=date(2026,2,2),weeks=20,
+            deadline=datetime(2026,1,1),state='matched',settings={'groups':['G']})
+        self.db.add(plan);self.db.flush();self.db.add(MatchRun(id=4,plan_id=4,payload={'plan_revision':1}))
+        self.db.add(TeachingTask(id=4,plan_id=4,payload={'name':'Design','code':'D4','group':'G','class_name':'G',
+            'cohort':'2026','major':'视觉传达设计','required_hours':4,'start_week':1,'end_week':2,'tail_weeks':0,
+            'teacher_count':1,'max_students':30,'room_id':None,'room_type':'','slots':[],
+            'source':{'major':'视觉传达设计','course_metadata':{'semester':2,'weekly_hours':2,
+                'teaching_weeks':2,'hours_per_session':2}}}))
+        self.db.flush();self.db.add(TeachingAssignment(task_id=4,teacher_ids=[7],match_id=4,locked=True));self.db.commit()
+        headers={'Authorization':'Bearer '+(await self.client.post('/api/debug/session',json={'role':'admin'})).json()['access_token']}
+        response=await self.client.post('/api/planning/plans/4/auto-schedule/ai-draft',headers=headers)
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual(response.json()['scheduled'],1)
+        self.assertGreater(self.db.query(PeriodSlot).filter_by(task_id=4).count(),0)
+        self.assertEqual(self.db.get(TeachingTask,4).payload['room_id'],1)
+        self.assertEqual(self.db.query(AutoSchedulePreview).filter_by(plan_id=4).count(),0)
+
+    async def test_one_click_ai_schedule_leaves_all_tasks_unchanged_when_blocked(self):
+        plan=AcademicPlan(id=5,name='AI blocked',start_date=date(2026,2,2),weeks=20,
+            deadline=datetime(2026,1,1),state='matched',settings={'groups':['G']})
+        self.db.add(plan);self.db.flush();self.db.add(MatchRun(id=5,plan_id=5,payload={'plan_revision':1}))
+        self.db.add(TeachingTask(id=5,plan_id=5,payload={'name':'No room','code':'N5','group':'G','class_name':'G',
+            'required_hours':2,'start_week':1,'end_week':1,'tail_weeks':0,'teacher_count':1,
+            'room_id':None,'slots':[],'source':{'course_metadata':{'weekly_hours':2,'teaching_weeks':1}}}))
+        self.db.flush();self.db.add(TeachingAssignment(task_id=5,teacher_ids=[7],match_id=5,locked=True));self.db.commit()
+        headers={'Authorization':'Bearer '+(await self.client.post('/api/debug/session',json={'role':'admin'})).json()['access_token']}
+        response=await self.client.post('/api/planning/plans/5/auto-schedule/ai-draft',headers=headers)
+        self.assertEqual(response.status_code,409,response.text)
+        self.assertEqual(self.db.query(PeriodSlot).filter_by(task_id=5).count(),0)
+        self.assertIsNone(self.db.get(TeachingTask,5).payload['room_id'])
 
 
 if __name__=='__main__':

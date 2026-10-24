@@ -6,7 +6,7 @@ from typing import List
 
 from app.database import get_db
 from app.models.course import Course
-from app.models.planning import OfferingUnit
+from app.models.planning import OfferingUnit, AcademicDirection, AcademicProgram
 from app.services.course_library import attach_sources, public_course_clause
 from app.schemas.course import CourseCreate, CourseUpdate, CourseResponse
 from app.services.auth import require_user
@@ -77,9 +77,11 @@ def bulk_update_courses(data: CourseBulkUpdateInput, user=Depends(require_user),
         validate_leader(db, updates['leader_teacher_id'])
     if 'offering_unit_id' in updates:
         validate_offering_unit(db, updates['offering_unit_id'])
+    validate_course_scope(db, updates, partial=True)
     try:
         for course in courses:
-            for key, value in updates.items():
+            normalized = normalize_course_scope(db, course, updates)
+            for key, value in normalized.items():
                 setattr(course, key, value)
         db.commit()
     except Exception:
@@ -135,7 +137,8 @@ def create_course(data: CourseCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail=f"课程编码'{data.course_code}'已存在")
     validate_leader(db,data.leader_teacher_id)
     validate_offering_unit(db,data.offering_unit_id)
-    course = Course(**data.model_dump())
+    values=normalize_course_scope(db, None, data.model_dump())
+    course = Course(**values)
     db.add(course)
     db.commit()
     db.refresh(course)
@@ -150,6 +153,7 @@ def update_course(course_id: int, data: CourseUpdate, db: Session = Depends(get_
     update_data = data.model_dump(exclude_unset=True)
     if 'leader_teacher_id' in update_data:validate_leader(db,data.leader_teacher_id)
     if 'offering_unit_id' in update_data:validate_offering_unit(db,data.offering_unit_id)
+    update_data=normalize_course_scope(db, course, update_data)
     for key, value in update_data.items():
         setattr(course, key, value)
     db.commit()
@@ -178,3 +182,53 @@ def validate_leader(db, teacher_id):
 def validate_offering_unit(db,unit_id):
     if unit_id is not None and not db.get(OfferingUnit,unit_id):
         raise HTTPException(422,'开课单位不存在')
+
+
+def validate_course_scope(db, values, partial=False):
+    program_id=values.get('program_id')
+    direction_id=values.get('direction_id')
+    if program_id is not None and not db.get(AcademicProgram,program_id):
+        raise HTTPException(422,'所选专业不存在，请从管理员专业目录选择')
+    if direction_id is not None:
+        direction=db.get(AcademicDirection,direction_id)
+        if not direction:raise HTTPException(422,'所选专业方向不存在，请从管理员专业目录选择')
+        if program_id is not None and direction.program_id!=program_id:
+            raise HTTPException(422,'专业方向不属于所选专业')
+
+
+def normalize_course_scope(db, course, values):
+    result=dict(values)
+    current_program=getattr(course,'program_id',None) if course else None
+    current_direction=getattr(course,'direction_id',None) if course else None
+    program_id=result.get('program_id',current_program)
+    direction_id=result.get('direction_id',current_direction)
+    if 'department' in result and result.get('department') and 'program_id' not in result:
+        legacy=db.query(AcademicProgram).filter_by(name=str(result['department']).strip()).first()
+        if legacy:
+            program_id=legacy.id;result['program_id']=legacy.id
+        elif db.query(AcademicProgram.id).first():
+            raise HTTPException(422,'适用专业不在管理员专业目录中，请从目录选择')
+    if 'program_id' in result and program_id is None:
+        direction_id=None
+        result['direction_id']=None
+    elif 'program_id' in result and program_id!=current_program and 'direction_id' not in result:
+        direction_id=None
+        result['direction_id']=None
+    validate_course_scope(db,{**result,'program_id':program_id,'direction_id':direction_id})
+    if direction_id is not None:
+        direction=db.get(AcademicDirection,direction_id)
+        result['program_id']=direction.program_id
+        if direction.offering_unit_id:
+            result['offering_unit_id']=direction.offering_unit_id
+    elif program_id is not None:
+        result['program_id']=program_id
+    final_program=result.get('program_id',current_program)
+    if final_program is not None:
+        program=db.get(AcademicProgram,final_program)
+        result['department']=program.name
+        if 'direction_id' not in result and 'program_id' in result and final_program!=current_program:
+            result['direction_id']=None
+    elif 'program_id' in result and result['program_id'] is None:
+        result['department']=None
+        result['direction_id']=None
+    return result

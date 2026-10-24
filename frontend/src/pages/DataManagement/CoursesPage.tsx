@@ -1,17 +1,17 @@
 // 课程管理页面（含总课时自动计算）
 import { useEffect, useState, useMemo, useCallback } from 'react';
-import type { FormInstance } from 'antd';
 import { Form, Input, InputNumber, Select, Switch, Space, Button, Alert, Modal, Popconfirm, message, Tabs, Collapse } from 'antd';
 import { DownloadOutlined } from '@ant-design/icons';
 import DataTable from '../../components/DataTable';
 import { ImportButton } from '../../components/DataImport';
 import { downloadDataset } from '../../lib/download';
-import { WEEKDAY_OPTIONS, weekdayLabel } from '../../lib/weekdays';
+import { WEEKDAY_OPTIONS } from '../../lib/weekdays';
 import { courseApi, teacherApi } from '../../api/client';
 import { filterCourses, courseFilterOptions, loadAllCourses, currentGradeCohorts, courseCohorts, inGrade } from '../../lib/courseFilters';
 import type { CourseFilters } from '../../lib/courseFilters';
 import { gradeLabel } from '../../lib/adminStageGrid';
 import { planningApi } from '../../api/planning';
+import { Link } from 'react-router-dom';
 
 const GRADE_COHORTS = currentGradeCohorts();
 
@@ -19,6 +19,8 @@ export default function CoursesPage() {
   const [teachers,setTeachers]=useState<any[]>([]);
   const [teacherError,setTeacherError]=useState('');
   const [units,setUnits]=useState<any[]>([]);
+  const [programs,setPrograms]=useState<any[]>([]);
+  const [directions,setDirections]=useState<any[]>([]);
   const [teacherLoading,setTeacherLoading]=useState(true);
   const loadTeachers=useCallback(async()=>{
     setTeacherLoading(true);setTeacherError('');
@@ -28,6 +30,7 @@ export default function CoursesPage() {
   },[]);
   useEffect(()=>{void loadTeachers();},[loadTeachers]);
   useEffect(()=>{void planningApi.offeringUnits().then(setUnits).catch(()=>setUnits([]));},[]);
+  useEffect(()=>{void Promise.all([planningApi.programs(),planningApi.directions()]).then(([p,d])=>{setPrograms(p);setDirections(d);}).catch(()=>{setPrograms([]);setDirections([]);});},[]);
   const [filters, setFilters] = useState<CourseFilters>({});
   const [gradeTab,setGradeTab]=useState<string>(GRADE_COHORTS[0]);
   const [includeInactive,setIncludeInactive]=useState(false);
@@ -35,8 +38,6 @@ export default function CoursesPage() {
   const [catalog, setCatalog] = useState<any[]>([]);
   const [tableKey,setTableKey]=useState(0),[selectedRows,setSelectedRows]=useState<any[]>([]),[bulkOpen,setBulkOpen]=useState(false),[bulkBusy,setBulkBusy]=useState(false);
   const [bulkForm]=Form.useForm();
-  const [unitForm]=Form.useForm();
-  const [unitOpen,setUnitOpen]=useState(false),[unitBusy,setUnitBusy]=useState(false);
   const options = useMemo(() => courseFilterOptions(catalog), [catalog]);
   const api = useMemo(() => ({...courseApi, list: async (params?: any) => {
     // Load every page so categories and filtering include the complete catalog.
@@ -57,12 +58,6 @@ export default function CoursesPage() {
     try{await courseApi.bulkUpdate(selectedRows.map(row=>row.id),updates);message.success(`已批量修改${selectedRows.length}门课程`);setBulkOpen(false);setSelectedRows([]);refresh();}
     catch(e){message.error(e instanceof Error?e.message:'批量修改失败');}
     finally{setBulkBusy(false);}
-  };
-  const addUnit=async()=>{
-    setUnitBusy(true);
-    try{const values=await unitForm.validateFields();await planningApi.createOfferingUnit(values);unitForm.resetFields();setUnits(await planningApi.offeringUnits());setUnitOpen(false);message.success('开课单位已新增');}
-    catch(e){if(e instanceof Error)message.error(e.message);}
-    finally{setUnitBusy(false);}
   };
   return (<>
     {teacherError&&<Alert type="error" showIcon title={`课程负责人教师名单加载失败：${teacherError}`} action={<Button onClick={()=>void loadTeachers()}>重试</Button>} style={{marginBottom:16}}/>}
@@ -96,10 +91,8 @@ export default function CoursesPage() {
         { title: 'ID', dataIndex: 'id', width: 60 },
         { title: '课程名称', dataIndex: 'name', width: 160 },
         { title: '课程编码', dataIndex: 'course_code', width: 100 },
-        { title: '状态', dataIndex: 'is_active', width: 80, render: (v:boolean) => v===false?<span style={{color:'#8c8c8c'}}>已移出</span>:'活动' },
         { title: '课程负责人', width:160, render:(_:unknown,r:any)=>r.leader_teacher_name?`${r.leader_teacher_name}（${r.leader_teacher_code}）`:'未指定' },
         { title: '适用专业', dataIndex: 'department', width: 100, render: (v: string) => v || <span style={{color:'#ccc'}}>通用课程</span> },
-        { title: '开课单位', dataIndex: 'offering_unit_name', width: 120, render: (v:string) => v || '未设置' },
         { title: '课程类型', dataIndex: 'course_type', width: 120 },
         { title: '上课学期', dataIndex: 'semester', width: 100, render: (v:number|null|undefined) => v?`第${v}学期`:'待补录' },
         { title: '课程性质', dataIndex: 'course_nature', width: 90 },
@@ -112,14 +105,11 @@ export default function CoursesPage() {
             const weeks=v||Math.max(1,Math.ceil((r.total_hours||0)/days/2));
             return `${weeks} 周${v?'':'（自动）'}`;
         } },
-        { title: '每周上课日', dataIndex: 'weekdays', width: 130, render: (days:number[]) => weekdayLabel(days) || '未设置' },
         { title: '计划总学时', dataIndex: 'total_hours', width: 100, render: (v: number|null) => v ?? '-' },
         { title: '学分', dataIndex: 'credits', width: 60 },
-        { title: '需连排', dataIndex: 'requires_consecutive', width: 70, render: (v: boolean) => v ? '是' : '否' },
-        { title: '需实验室', dataIndex: 'requires_lab', width: 80, render: (v: boolean) => v ? '是' : '否' },
       ]}
-      formFields={form => <CourseFields form={form} teachers={teachers} teacherLoading={teacherLoading} teacherError={teacherError} units={units} />}
-      extraToolbar={<><Switch checked={includeInactive} checkedChildren="含已移出" unCheckedChildren="仅活动" onChange={value=>{setIncludeInactive(value);refresh();}}/><Switch checked={includePublic} checkedChildren="含公共课" unCheckedChildren="隐藏公共课" onChange={value=>{setIncludePublic(value);refresh();}}/><Button icon={<DownloadOutlined/>} onClick={()=>void downloadCourses()}>下载</Button><ImportButton entityType="courses" cohort={gradeTab} onImported={refresh} label="批量导入"/><Button onClick={()=>setUnitOpen(true)}>开课单位</Button></>}
+      formFields={() => <CourseFields teachers={teachers} teacherLoading={teacherLoading} teacherError={teacherError} units={units} programs={programs} directions={directions} />}
+      extraToolbar={<><Switch checked={includeInactive} checkedChildren="含已移出" unCheckedChildren="仅活动" onChange={value=>{setIncludeInactive(value);refresh();}}/><Switch checked={includePublic} checkedChildren="含公共课" unCheckedChildren="隐藏公共课" onChange={value=>{setIncludePublic(value);refresh();}}/><Button icon={<DownloadOutlined/>} onClick={()=>void downloadCourses()}>下载</Button><ImportButton entityType="courses" cohort={gradeTab} onImported={refresh} label="批量导入"/><Link to="/data/programs-grades?tab=units"><Button>专业 / 教研室管理</Button></Link></>}
       extraRowActions={record=>record.is_active===false?<Button type="link" size="small" onClick={async()=>{try{await courseApi.update(record.id,{is_active:true});message.success('课程已恢复到活动课程库');refresh();}catch(e){message.error(e instanceof Error?e.message:'恢复失败');}}}>恢复</Button>:null}
       bulkActions={(rows,clearSelection)=><Space wrap><span>已选 {rows.length} 门</span><Button onClick={()=>{setSelectedRows(rows);bulkForm.resetFields();setBulkOpen(true);}}>批量修改</Button><Popconfirm title={`将${rows.length}门课程移出活动课程库？历史课表保留，可在课程表中恢复。`} onConfirm={async()=>{setBulkBusy(true);try{await courseApi.bulkRemove(rows.map(row=>row.id));message.success(`已移出${rows.length}门课程`);clearSelection();setSelectedRows([]);refresh();}catch(e){message.error(e instanceof Error?e.message:'批量移出失败');}finally{setBulkBusy(false);}}} okText="移出课程库" cancelText="取消"><Button danger loading={bulkBusy}>批量移出</Button></Popconfirm></Space>}
     />
@@ -136,13 +126,10 @@ export default function CoursesPage() {
         <Form.Item name="is_active" label="课程状态"><Select allowClear placeholder="不修改" options={[{value:true,label:'纳入课程库'},{value:false,label:'停用'}]}/></Form.Item>
       </Form>
     </Modal>
-    <Modal title="新增开课单位" open={unitOpen} onCancel={()=>setUnitOpen(false)} onOk={()=>void addUnit()} confirmLoading={unitBusy} destroyOnClose>
-      <Form form={unitForm} layout="vertical"><Form.Item name="code" label="单位编码" rules={[{required:true}]}><Input/></Form.Item><Form.Item name="name" label="开课单位名称" rules={[{required:true}]}><Input/></Form.Item></Form>
-    </Modal>
   </>);
 }
 
-function CourseFields({ form,teachers,teacherLoading,teacherError,units }: { form: FormInstance;teachers:any[];teacherLoading:boolean;teacherError:string;units:any[] }) {
+function CourseFields({ teachers,teacherLoading,teacherError,units,programs,directions }: { teachers:any[];teacherLoading:boolean;teacherError:string;units:any[];programs:any[];directions:any[] }) {
         return (
           <>
             <Form.Item name="name" label="课程名称" rules={[{ required: true }]}>
@@ -151,11 +138,15 @@ function CourseFields({ form,teachers,teacherLoading,teacherError,units }: { for
             <Form.Item name="course_code" label="课程编码" rules={[{ required: true }]}>
               <Input placeholder="如: MATH101" />
             </Form.Item>
+            <Form.Item name="is_active" label="课程状态" valuePropName="checked">
+              <Switch checkedChildren="活动" unCheckedChildren="移出" />
+            </Form.Item>
             <Form.Item name="leader_teacher_id" label="课程负责人" getValueFromEvent={value=>value??null} extra="由管理员指定一位教师，可留空或清除；此项不会自动分配授课任务。">
               <Select aria-label="课程负责人" allowClear showSearch optionFilterProp="label" loading={teacherLoading} disabled={teacherLoading||Boolean(teacherError)} placeholder="选择一位课程负责人" options={teachers.map(t=>({value:t.id,label:`${t.name}（${t.teacher_code}）`}))}/>
             </Form.Item>
             <Form.Item name="offering_unit_id" label="开课单位">
-              <Select allowClear placeholder="选择承担教学的单位" options={units.map(u=>({value:u.id,label:u.name}))}/>
+              <Select allowClear showSearch optionFilterProp="label" placeholder="选择教研室"
+                options={units.filter(u=>u.is_active!==false).map(u=>({value:u.id,label:u.name}))}/>
             </Form.Item>
             <Form.Item name="course_type" label="课程类型" rules={[{required:true}]}>
               <Select options={['专业课','学科通识课','德育通识课','综合实践课','跨专业交叉课','国际课程'].map(t => ({ label: t, value: t }))} />
@@ -187,8 +178,11 @@ function CourseFields({ form,teachers,teacherLoading,teacherError,units }: { for
             <Form.Item name="requires_lab" label="需要实验室" valuePropName="checked">
               <Switch />
             </Form.Item>
-            <Form.Item name="department" label="所属专业" help="与班级的「所属专业」一致时，该课程优先分配给对应班级">
-              <Input placeholder="如: 人工智能/理科/文科（留空则为通用课）" />
+            <Form.Item name="program_id" label="适用专业" help="从管理员专业目录选择；留空表示通用课程">
+              <Select allowClear showSearch optionFilterProp="label" placeholder="选择标准专业" options={programs.map(p=>({value:p.id,label:`${p.name}（${p.code}）`}))}/>
+            </Form.Item>
+            <Form.Item noStyle shouldUpdate={(before,after)=>before.program_id!==after.program_id}>
+              {({getFieldValue})=><Form.Item name="direction_id" label="专业方向"><Select allowClear showSearch optionFilterProp="label" placeholder="选择专业方向" options={directions.filter(d=>d.entry_type==='专业方向'&&(!getFieldValue('program_id')||d.program_id===getFieldValue('program_id'))).map(d=>({value:d.id,label:`${d.name}（${d.program_name}）`}))}/></Form.Item>}
             </Form.Item>
             <Form.Item name="remarks" label="备注">
               <Input.TextArea rows={2} />

@@ -155,7 +155,16 @@ def _published_teacher_tasks(db,plan):
     return chosen
 
 
-def build_auto_schedule_candidate(db,plan,algorithm='genetic'):
+def _draft_task_order(tasks):
+    def key(task):
+        metadata=(task.get('source') or {}).get('course_metadata') or {}
+        return (str(task.get('major') or task.get('department') or (task.get('source') or {}).get('major') or ''),
+            _int(metadata.get('semester')) or 99,task.get('start_week') or 99,
+            -(_int(task.get('required_hours')) or 0),task['id'])
+    return sorted(tasks,key=key)
+
+
+def build_auto_schedule_candidate(db,plan,algorithm='genetic',task_order=None):
     if plan.state!='matched':raise HTTPException(409,'自动编排仅在教师匹配审核阶段运行')
     from app.api.planning import profile_for,assigned_tasks
     tasks=tasks_for_plan(db,plan)
@@ -188,7 +197,9 @@ def build_auto_schedule_candidate(db,plan,algorithm='genetic'):
         for teacher_id in task.get('teacher_ids',[]):
             teacher_chosen[teacher_id].append((task,plan))
 
-    pending.sort(key=lambda item:(len(_room_candidates(db,item[0],usage)),len(item[1]),-item[0].get('required_hours',0)))
+    priority={task_id:index for index,task_id in enumerate(task_order or [])}
+    pending.sort(key=lambda item:(priority.get(item[0]['id'],len(priority)+item[0]['id']),
+        len(_room_candidates(db,item[0],usage)),len(item[1]),-item[0].get('required_hours',0)))
     options=[]
     for task,patterns,normal_weeks,tail_weeks in pending:
         task_options=[]
@@ -208,7 +219,7 @@ def build_auto_schedule_candidate(db,plan,algorithm='genetic'):
         try:
             validate_tasks(db,plan,complete)
             from app.api.stage_designer import validate_spans
-            validate_spans(plan,complete)
+            validate_spans(plan,complete,db)
         except HTTPException:
             return None
         chosen={teacher:list(rows) for teacher,rows in teacher_chosen.items()}
@@ -276,10 +287,48 @@ def build_auto_schedule_candidate(db,plan,algorithm='genetic'):
     teacher_names={row.id:row.name for row in db.query(Teacher)}
     return {'success':True,'algorithm':algorithm,'score':best_score,'generations':generations,
         'scheduled':len(solution),'tasks':[{'task_id':task['id'],'name':task['name'],'group':task['group'],
+            'major':task.get('major') or task.get('department') or (task.get('source') or {}).get('major') or '',
+            'semester':((task.get('source') or {}).get('course_metadata') or {}).get('semester'),
             'teacher_ids':task['teacher_ids'],'teacher_names':[teacher_names.get(tid,'') for tid in task['teacher_ids']],
             'start_week':task['start_week'],'end_week':task['end_week'],
             'room_id':task['room_id'],'room_name':task['room_name'],'room_type':task['room_type'],
             'slots':task['slots']} for task in solution]}
+
+
+def build_ai_draft_candidate(db,plan):
+    """AI supplies a course order; the constraint solver remains responsible for placements."""
+    from app.services.ai_config import LLMError,call_llm,resolve_config
+    tasks=tasks_for_plan(db,plan)
+    ordered=_draft_task_order(tasks)
+    config=resolve_config(db)
+    source='rules';model=None
+    if db is not None:db.rollback()
+    if config and config.get('api_key'):
+        context=[{'task_id':task['id'],'name':task['name'],'group':task.get('group',''),
+            'major':task.get('major') or task.get('department') or (task.get('source') or {}).get('major') or '',
+            'cohort':task.get('cohort') or (task.get('source') or {}).get('cohort') or '',
+            'semester':((task.get('source') or {}).get('course_metadata') or {}).get('semester'),
+            'course_type':((task.get('source') or {}).get('course_metadata') or {}).get('course_type'),
+            'start_week':task.get('start_week'),'end_week':task.get('end_week'),
+            'required_hours':task.get('required_hours')} for task in ordered]
+        try:
+            result=call_llm(config,
+                '你是课程编排助手。只返回JSON对象，格式为{"task_ids":[整数...]}。按专业培养逻辑、开课学期、课程先后衔接给出任务优先顺序。只能使用输入中的task_id，必须完整且不重复；不要调整课程周段，不要生成节次、教师或教室。',
+                '请排序以下课程任务：\n'+json.dumps(context,ensure_ascii=False),max_tokens=2000,json_mode=True)
+            payload=json.loads(result.get('text',''))
+            ids=payload.get('task_ids') if isinstance(payload,dict) else None
+            known={task['id'] for task in tasks}
+            if isinstance(ids,list) and len(ids)==len(known) and set(ids)==known:
+                ordered=sorted(tasks,key=lambda task:ids.index(task['id']))
+                source='llm';model=result.get('model')
+        except (LLMError,ValueError,TypeError,AttributeError):
+            pass
+    candidate=build_auto_schedule_candidate(db,plan,'backtracking',[task['id'] for task in ordered])
+    candidate.update({'draft_source':source,'draft_model':model,
+        'ordering':[{'task_id':task['id'],'name':task['name'],'major':task.get('major') or task.get('department') or
+            (task.get('source') or {}).get('major') or '',
+            'semester':((task.get('source') or {}).get('course_metadata') or {}).get('semester')} for task in ordered]})
+    return candidate
 
 
 def apply_auto_schedule_candidate(db,plan,user,candidate,preview_record=None):
@@ -297,7 +346,7 @@ def apply_auto_schedule_candidate(db,plan,user,candidate,preview_record=None):
     complete=[task for task in current if task['id'] not in pending_ids]+merged
     validate_tasks(db,plan,complete)
     from app.api.stage_designer import validate_spans
-    validate_spans(plan,complete)
+    validate_spans(plan,complete,db)
     from app.api.planning import profile_for
     published_teachers=_published_teacher_tasks(db,plan)
     chosen=defaultdict(list)

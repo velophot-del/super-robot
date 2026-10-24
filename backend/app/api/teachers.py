@@ -9,6 +9,7 @@ from app.models.schedule import ScheduleEntry
 from app.models.course import Course
 from app.models.class_info import ClassInfo
 from app.models.planning import TeacherProfile
+from app.models.planning import OfferingUnit
 from app.services.course_library import professional_courses
 from app.services.course_catalog import course_schedule_info
 from app.services.schedule_versions import resolve_schedule_version
@@ -144,7 +145,8 @@ def create_teacher(data: TeacherCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="教师工号或邮箱已存在")
     from app.services.teacher_positions import validate_position
     validate_position(data.position, data.review_major)
-    teacher = Teacher(**data.model_dump())
+    values=normalize_teacher_unit(db,data.model_dump())
+    teacher = Teacher(**values)
     db.add(teacher)
     db.commit()
     db.refresh(teacher)
@@ -157,6 +159,7 @@ def update_teacher(teacher_id: int, data: TeacherUpdate, db: Session = Depends(g
     if not teacher:
         raise HTTPException(status_code=404, detail="教师不存在")
     update_data = data.model_dump(exclude_unset=True)
+    update_data=normalize_teacher_unit(db,update_data,teacher)
     from app.services.teacher_positions import validate_position
     validate_position(update_data.get('position', teacher.position),
                       update_data.get('review_major', teacher.review_major))
@@ -165,6 +168,27 @@ def update_teacher(teacher_id: int, data: TeacherUpdate, db: Session = Depends(g
     db.commit()
     db.refresh(teacher)
     return teacher
+
+
+def normalize_teacher_unit(db, values, teacher=None):
+    result=dict(values)
+    unit_id=result.get('offering_unit_id',getattr(teacher,'offering_unit_id',None))
+    department=result.get('department',getattr(teacher,'department',None))
+    if unit_id is None and department:
+        unit=db.query(OfferingUnit).filter_by(name=department.strip()).first()
+        if unit:
+            unit_id=unit.id
+            result['offering_unit_id']=unit.id
+        elif db.query(OfferingUnit.id).first():
+            raise HTTPException(422,'所属部门不在管理员教研室目录中，请从目录选择')
+    if unit_id is not None:
+        unit=db.get(OfferingUnit,unit_id)
+        if not unit:raise HTTPException(422,'所选教研室不存在，请从管理员教研室目录选择')
+        result['offering_unit_id']=unit.id
+        result['department']=unit.name
+    elif 'offering_unit_id' in result and result['offering_unit_id'] is None:
+        result['department']=None
+    return result
 
 
 @router.delete("/{teacher_id}", summary="删除教师")

@@ -122,6 +122,9 @@ def create_class(data: ClassInfoCreate, db: Session = Depends(get_db)):
     if not values.get('program_id') and values.get('department'):
         program=db.query(AcademicProgram).filter_by(name=values['department']).first()
         if program:values['program_id']=program.id
+        else:raise HTTPException(422,'所属专业不在管理员专业目录中，请先维护专业目录')
+    if values.get('program_id'):
+        values['department']=db.get(AcademicProgram,values['program_id']).name
     cls = ClassInfo(**values)
     db.add(cls)
     db.commit()
@@ -137,6 +140,17 @@ def update_class(class_id: int, data: ClassInfoUpdate, db: Session = Depends(get
         raise HTTPException(status_code=404, detail="班级不存在")
     update_data = data.model_dump(exclude_unset=True)
     if 'program_id' in update_data:validate_program(db,update_data['program_id'])
+    if 'department' in update_data and 'program_id' not in update_data and update_data['department']:
+        program=db.query(AcademicProgram).filter_by(name=update_data['department'].strip()).first()
+        if not program:raise HTTPException(422,'所属专业不在管理员专业目录中，请先维护专业目录')
+        update_data['program_id']=program.id
+    elif 'department' in update_data and not update_data['department'] and 'program_id' not in update_data:
+        update_data['program_id']=None
+    program_id=update_data.get('program_id',cls.program_id)
+    if program_id:
+        update_data['department']=db.get(AcademicProgram,program_id).name
+    elif 'program_id' in update_data and update_data['program_id'] is None:
+        update_data['department']=None
     for key, value in update_data.items():
         setattr(cls, key, value)
     db.commit()

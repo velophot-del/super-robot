@@ -7,11 +7,14 @@ export default function StageSelectionTable({plan,tasks,selected,onTask,onToggle
   const groups:string[]=plan.groups?.length?plan.groups:[...new Set<string>(tasks.map(t=>t.group))];
   const weeks=Array.from({length:plan.weeks},(_,i)=>i+1);
   if(!groups.length)return <Empty description="该周期暂无班级"/>;
+  const cohortFor=(group:string)=>{const groupTasks=tasks.filter(t=>t.group===group);return stageClassScope(group,plan.class_scopes||[],groupTasks).cohort||plan.cohort;};
+  const cohortStart=(cohort:string)=>plan.cohort_calendar_rules?.[String(cohort||'').replace(/(?:级|届)$/,'')]?.start_date||plan.start_date;
+  const startDates=new Set(groups.map(group=>cohortStart(cohortFor(group))));
   return <div className="stage-table-scroll">
     <table className="college-stage-table" aria-label={`${plan.major||'学院课程'}阶段${readOnly?'课表':'选课表'}`} style={{minWidth:304+plan.weeks*64}}>
       <colgroup><col style={{width:68}}/><col style={{width:110}}/><col style={{width:126}}/>{weeks.map(w=><col key={w}/>)}</colgroup>
       <thead><tr><th rowSpan={2}>年级</th><th rowSpan={2}>专业</th><th rowSpan={2}>开课班级</th>{weeks.map(w=><th key={w}>第{w}周</th>)}</tr>
-        <tr>{weeks.map(w=><th key={w} className="week-date">{weekDates(plan.start_date,w)}</th>)}</tr></thead>
+        <tr>{weeks.map(w=><th key={w} className="week-date">{startDates.size===1?weekDates([...startDates][0],w):'各年级分别设置'}</th>)}</tr></thead>
       <tbody>{groups.map(group=>{
         const groupTasks=tasks.filter(t=>t.group===group);
         const scope=stageClassScope(group,plan.class_scopes||[],groupTasks);
@@ -19,7 +22,7 @@ export default function StageSelectionTable({plan,tasks,selected,onTask,onToggle
         const {laneStep,rowHeight}=stageRowMetrics(bars);
         const exams=examWeeksFor(plan,scope.cohort||plan.cohort,group,plan.weeks);
         return <tr key={group}>
-          <th className="scope-cell" style={{left:0}}>{gradeLabel(scope.cohort||plan.cohort)||'—'}</th>
+          <th className="scope-cell" style={{left:0}}>{gradeLabel(scope.cohort||plan.cohort)||'—'}<div style={{fontSize:11,fontWeight:400}}>{cohortStart(scope.cohort||plan.cohort)}</div></th>
           <th className="scope-cell" style={{left:68}} title={scope.major}>{scope.major||plan.major||'—'}</th>
           <th className="scope-cell" style={{left:178}} title={group}>{group}</th>
           <td colSpan={plan.weeks} style={{padding:0}}><div style={{position:'relative',height:rowHeight}}>

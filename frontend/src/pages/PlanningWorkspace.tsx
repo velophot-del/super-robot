@@ -20,6 +20,12 @@ const { Title, Text, Paragraph } = Typography;
 const stateNames: Record<string,string> = { draft:'计划草稿', open:'开放填报', matched:'匹配待审核', published:'已发布' };
 const textList = (s: string | string[]) => Array.isArray(s) ? s : (s || '').split(/[,，\n]/).map(x => x.trim()).filter(Boolean);
 
+async function loadAllClasses(){
+  const rows:any[]=[];let skip=0;
+  while(skip<10000){const page=await classApi.list({skip,limit:500}) as any[];rows.push(...page);if(page.length<500)break;skip+=page.length;}
+  return rows;
+}
+
 export function ManagementPlanningWorkspace({section='plan'}:{section?:'plan'|'review'}={}) {
   const { user }=useAuth();
   const admin=can(user,'admin'), review=can(user,'review');
@@ -46,7 +52,7 @@ export function ManagementPlanningWorkspace({section='plan'}:{section?:'plan'|'r
       const list=await api.plans();setPlans(list);
       const target=id ?? list[0]?.id;
       if(target) { if(!id)setId(target); setState(await api.state(target,section==='review'&&!admin)); } else setState(undefined);
-      if(admin){ const [p,c]=await Promise.all([api.profiles(),classApi.list({limit:500})]);setProfiles(p);setClasses(c); }
+      if(admin){ const [p,c]=await Promise.all([api.profiles(),loadAllClasses()]);setProfiles(p);setClasses(c); }
     }catch(e){setError(e instanceof Error?e.message:'加载失败');}finally{setLoading(false);}
   },[id,admin,section]);
   useEffect(()=>{void load();},[load]);

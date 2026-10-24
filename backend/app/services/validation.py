@@ -89,8 +89,7 @@ class ValidationService:
 
         if not data.get("name"):
             self.errors.append({"field": "name", "message": "课程名称不能为空"})
-        if not data.get("course_code"):
-            self.errors.append({"field": "course_code", "message": "课程编码不能为空"})
+        # 新导入课程可由导入服务按年级、专业方向和学期自动编码。
         semester = data.get("semester")
         try:
             valid_semester = semester is not None and 1 <= int(semester) <= 12

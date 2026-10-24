@@ -114,6 +114,34 @@ class CourseGroupsLeadersTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(current.json()['success'],current.text)
         self.assertEqual(self.db.query(Course).filter_by(course_code='D4').one().semester,2)
 
+    async def test_csv_import_generates_curriculum_code_and_continues_sequence(self):
+        h=await self.headers()
+        async def upload(name):
+            content=f'课程名称,课程编码,上课学期,总课时,适用年级,所属专业\n{name},,3,32,2024,视觉传达设计\n'
+            return await self.client.post('/api/io/csv/courses',headers=h,files={'file':('courses.csv',content.encode(),'text/csv')})
+        first=await upload('第一门');self.assertEqual(first.status_code,200,first.text)
+        second=await upload('第二门');self.assertEqual(second.status_code,200,second.text)
+        codes={row.name:row.course_code for row in self.db.query(Course).all()}
+        self.assertEqual(codes,{'第一门':'24010301','第二门':'24010302'})
+
+    async def test_csv_import_requires_known_direction_for_generated_code(self):
+        h=await self.headers()
+        content='课程名称,课程编码,上课学期,总课时,适用年级,所属专业\n新课,,3,32,2024,未知专业\n'
+        response=await self.client.post('/api/io/csv/courses',headers=h,files={'file':('courses.csv',content.encode(),'text/csv')})
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual(response.json()['imported'],0)
+        self.assertEqual(self.db.query(Course).count(),0)
+        self.assertTrue(any('专业方向' in error for error in response.json()['errors']))
+
+    async def test_csv_generated_code_skips_existing_manual_sequence(self):
+        self.db.add(Course(name='既有课',course_code='24010302',semester=3,total_hours=32,cohort='2024',department='视觉传达设计'))
+        self.db.commit()
+        h=await self.headers()
+        content='课程名称,课程编码,上课学期,总课时,适用年级,所属专业\n新课,,3,32,2024,视觉传达设计\n'
+        response=await self.client.post('/api/io/csv/courses',headers=h,files={'file':('courses.csv',content.encode(),'text/csv')})
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual(self.db.query(Course).filter_by(name='新课').one().course_code,'24010303')
+
 
     async def test_first_login_can_read_course_group_options_before_setup(self):
         from app.models.teacher import Teacher
@@ -134,9 +162,11 @@ class CourseLeaderMigrationTests(unittest.TestCase):
             engine=create_engine('sqlite:///'+str(Path(folder)/'old.db'))
             with engine.begin() as conn:
                 conn.execute(text('CREATE TABLE teachers (id INTEGER PRIMARY KEY)'))
-                conn.execute(text('CREATE TABLE courses (id INTEGER PRIMARY KEY, name TEXT, semester_sessions INTEGER, weekly_sessions INTEGER, hours_per_session INTEGER)'))
-                conn.execute(text("INSERT INTO courses VALUES (1,'Existing',16,1,2)"))
+                conn.execute(text('CREATE TABLE courses (id INTEGER PRIMARY KEY, name TEXT, semester_sessions INTEGER, weekly_sessions INTEGER, hours_per_session INTEGER, weekdays JSON)'))
+                conn.execute(text("INSERT INTO courses VALUES (1,'Existing SQL null',16,1,2,NULL)"))
+                conn.execute(text("INSERT INTO courses VALUES (2,'Existing JSON null',16,1,2,'null')"))
             _migrate_course_columns(engine);_migrate_course_columns(engine)
             with engine.connect() as conn:
-                self.assertEqual(tuple(conn.execute(text('SELECT name, leader_teacher_id FROM courses')).one()),('Existing',None))
+                self.assertEqual(conn.execute(text('SELECT name, leader_teacher_id, weekdays FROM courses ORDER BY id')).all(),
+                    [('Existing SQL null',None,'[]'),('Existing JSON null',None,'[]')])
             engine.dispose()

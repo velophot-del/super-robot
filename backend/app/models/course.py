@@ -25,6 +25,8 @@ class Course(Base, TimestampMixin):
     requires_lab = Column(Boolean, default=False, comment="是否需要实验室/机房")
     priority = Column(Integer, default=0, comment="优先级(0-10,越大越优先)")
     department = Column(String(100), nullable=True, comment="所属专业")
+    program_id = Column(Integer, ForeignKey('academic_programs.id'), nullable=True, comment='标准专业')
+    direction_id = Column(Integer, ForeignKey('academic_directions.id'), nullable=True, comment='专业方向')
     offering_unit_id = Column(Integer, ForeignKey('offering_units.id'), nullable=True, comment='开课单位')
     leader_teacher_id = Column(Integer, ForeignKey('teachers.id', ondelete='SET NULL'), nullable=True, comment='课程负责人')
     remarks = Column(Text, nullable=True, comment="备注/课程描述")

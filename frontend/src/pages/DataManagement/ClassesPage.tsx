@@ -104,11 +104,8 @@ export default function ClassesPage() {
             <Form.Item name="student_count" label="学生人数">
               <InputNumber min={1} max={200} style={{ width: '100%' }} />
             </Form.Item>
-            <Form.Item name="department" label="所属专业">
-              <Input placeholder="如: 计算机科学" />
-            </Form.Item>
             <Form.Item name="program_id" label="标准专业">
-              <Select allowClear showSearch optionFilterProp="label" placeholder="关联标准专业" options={programs.map(p=>({value:p.id,label:`${p.name}（${p.code}）`}))}/>
+              <Select allowClear showSearch optionFilterProp="label" placeholder="从管理员专业目录选择" options={programs.map(p=>({value:p.id,label:`${p.name}（${p.code}）`}))}/>
             </Form.Item>
             <Form.Item name="is_active" label="纳入排课" valuePropName="checked" initialValue={true}>
               <Switch checkedChildren="有效" unCheckedChildren="停用" />

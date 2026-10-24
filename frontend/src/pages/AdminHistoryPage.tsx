@@ -52,7 +52,7 @@ export default function AdminHistoryPage(){
       {label:'已发布排课周期',options:batches.map(b=>({value:`plan:${b.plan.id}`,label:b.plan.name}))},
       {label:'旧系统历史版本',options:versions.map(v=>({value:`legacy:${v.version}`,label:v.version}))},
     ]}/><Button onClick={()=>setRefresh(n=>n+1)}>刷新</Button></Space>
-    {batch&&<Alert type="info" showIcon title={`全学院导出范围：${coverage.length}个已发布计划，${coverage.reduce((n,b)=>n+b.tasks.length,0)}项课程任务`} description={<Space orientation="vertical"><span>汇总起始日期 {batch.plan.start_date}、周期 {batch.plan.weeks} 周的所有专业及年级；未发布计划不包含在内。</span><span>{coverage.map(b=>b.plan.name).join('；')}</span><Button type="primary" loading={exporting} disabled={loading||!!error} onClick={()=>void download(batch.plan.id,batch.plan.weeks||20)}>导出全学院{batch.plan.weeks||20}周课表 Excel</Button></Space>}/>}
+    {batch&&<Alert type="info" showIcon title={`全学院导出范围：${coverage.length}个已发布计划，${coverage.reduce((n,b)=>n+b.tasks.length,0)}项课程任务`} description={<Space orientation="vertical"><span>按发布快照汇总所有专业及年级；各年级课程日期与授课周数按发布时的规则计算。未发布计划不包含在内。</span><span>{coverage.map(b=>b.plan.name).join('；')}</span><Button type="primary" loading={exporting} disabled={loading||!!error} onClick={()=>void download(batch.plan.id,batch.plan.weeks||20)}>导出全学院{batch.plan.weeks||20}周课表 Excel</Button></Space>}/>}
     <Typography.Text type="secondary">完整展示第1—{batch?.plan.weeks||20}周，空周保留；考试周按年级设置（灰色单元格为考试周）。已发布周期读取正式发布快照。</Typography.Text>
     {(error||entryError)&&<Alert type="error" showIcon title={error||entryError}/>}
     <Spin spinning={loading||entryLoading}>

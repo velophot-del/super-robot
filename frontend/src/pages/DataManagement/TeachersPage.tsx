@@ -1,14 +1,15 @@
 // 教师管理页面（含查看已排课程 + 只读课程归属）
-import { useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Form, Input, InputNumber, Select, Button, Drawer, Table, Descriptions,
   Statistic, Row, Col, Empty, message, Tag, Typography,
-  Divider, Alert, Spin,
+  Divider, Alert, Spin, Tabs,
 } from 'antd';
 import { DownloadOutlined, EyeOutlined, SettingOutlined } from '@ant-design/icons';
 import DataTable from '../../components/DataTable';
 import { ImportButton } from '../../components/DataImport';
 import { teacherApi } from '../../api/client';
+import { planningApi } from '../../api/planning';
 import { downloadDataset } from '../../lib/download';
 import { weekdayLabel } from '../../lib/weekdays';
 import type { TeacherCoursesResponse, TeacherCourseInfo, TeacherCourseAffiliations } from '../../types';
@@ -17,6 +18,34 @@ const { Text } = Typography;
 
 export default function TeachersPage() {
   const [tableKey, setTableKey] = useState(0);
+  const [departments, setDepartments] = useState<string[]>([]);
+  const [studioUnits, setStudioUnits] = useState<{id:number;name:string;is_active:boolean}[]>([]);
+  const [departmentTab, setDepartmentTab] = useState('');
+  useEffect(()=>{void planningApi.offeringUnits().then(setStudioUnits).catch(()=>setStudioUnits([]));},[]);
+  const refreshDepartments = useCallback(async () => {
+    try {
+      const rows = await teacherApi.list({ limit: 500 }) as any[];
+      setDepartments([...new Set(rows.map(row => String(row.department || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-CN')));
+    } catch {
+      // The table reports the load error; keep existing department tabs if refresh fails.
+    }
+  }, []);
+  const tableApi = useMemo(() => ({
+    ...teacherApi,
+    list: async (params?: any) => {
+      const rows = await teacherApi.list(params) as any[];
+      if (!params?.search) {
+        setDepartments([...new Set(rows.map(row => String(row.department || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-CN')));
+      }
+      return rows;
+    },
+    create: async (data: any) => { const result = await teacherApi.create(data); void refreshDepartments(); return result; },
+    update: async (id: number, data: any) => { const result = await teacherApi.update(id, data); void refreshDepartments(); return result; },
+  }), [refreshDepartments]);
+  const activeDepartment = departments.includes(departmentTab) ? departmentTab : (departments[0] || '__unset__');
+  const filterData = useCallback((rows: any[]) => rows.filter(row =>
+    activeDepartment === '__unset__' ? !String(row.department || '').trim() : String(row.department || '').trim() === activeDepartment,
+  ), [activeDepartment]);
   const downloadTeachers = async () => {
     try { await downloadDataset('teachers'); message.success('下载已开始'); }
     catch (e) { message.error(e instanceof Error ? e.message : '下载失败'); }
@@ -83,11 +112,21 @@ export default function TeachersPage() {
 
   return (
     <>
+      <div style={{ marginBottom: 12 }}>
+        <Tabs type="card" activeKey={activeDepartment} onChange={setDepartmentTab}
+          items={[
+            ...departments.map(department => ({ key: department, label: department })),
+            { key: '__unset__', label: '未设置部门' },
+          ]}
+          aria-label="按教研室筛选教师"
+        />
+      </div>
       <DataTable
         key={tableKey}
         title="教师管理"
         entityType="teachers"
-        api={teacherApi}
+        api={tableApi}
+        filterData={filterData}
         extraToolbar={<>
           <Button icon={<DownloadOutlined/>} onClick={() => void downloadTeachers()}>下载</Button>
           <ImportButton entityType="teachers" onImported={() => setTableKey(k => k + 1)} />
@@ -111,8 +150,9 @@ export default function TeachersPage() {
             <Form.Item name="teacher_code" label="工号" rules={[{ required: true }]}>
               <Input placeholder="教师工号/编号" />
             </Form.Item>
-            <Form.Item name="department" label="所属部门">
-              <Input placeholder="如: 数学教研组" />
+            <Form.Item name="offering_unit_id" label="所属教研室">
+              <Select allowClear showSearch optionFilterProp="label" placeholder="从管理员教研室目录选择"
+                options={studioUnits.filter(unit=>unit.is_active!==false).map(unit=>({label:unit.name,value:unit.id}))}/>
             </Form.Item>
             <Form.Item name="title" label="职称">
               <Select options={['教授', '副教授', '讲师', '助教', '高级教师', '一级教师'].map(t => ({ label: t, value: t }))} />

@@ -1,7 +1,7 @@
 """数据导入导出API"""
 import json
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from typing import List
@@ -18,7 +18,7 @@ from app.models.teacher import Teacher
 from app.models.course import Course
 from app.models.classroom import Classroom
 from app.models.schedule import ScheduleEntry
-from app.models.planning import AcademicProgram, OfferingUnit, ImportPreviewBatch, PlanningEvent
+from app.models.planning import AcademicDirection, AcademicProgram, OfferingUnit, ImportPreviewBatch, PlanningEvent
 from app.utils.csv_parser import parse_csv_content, generate_csv_template
 from app.services.validation import ValidationService
 from app.services.export_service import ExportService
@@ -58,12 +58,25 @@ async def preview_courses_xlsx(file:UploadFile=File(...),cohort:str|None=Form(No
     try:rows,parse_errors=parse_course_workbook(content)
     except Exception as exc:raise HTTPException(422,f'Excel解析失败：{exc}') from exc
     if not rows and not parse_errors:raise HTTPException(422,'Excel中没有可识别的课程数据')
+    # 页签选定的目标届次优先于文件中的届次，也必须先于自动编码应用。
+    if target:
+        for row in rows:
+            row['cohort']=target
+    missing_codes=[row for row in rows if not str(row.get('course_code') or '').strip()]
+    code_errors={}
+    if missing_codes:
+        from app.services.course_codes import assign_course_codes
+        try:assign_course_codes(db,missing_codes)
+        except HTTPException as exc:
+            code_errors={id(row):str(exc.detail) for row in missing_codes}
     seen=set();preview_rows=[];counts={'new':0,'duplicate':0,'invalid':0}
     for row in rows:
-        # 从某个年级页签导入时，课程统一归属该年级，忽略文件中的适用年级。
-        if target:row['cohort']=target
-        issues,teacher_id,unit_id=course_row_issues(row,db)
         code=str(row.get('course_code') or '').strip()
+        if not code and id(row) in code_errors:
+            issues=[code_errors[id(row)]];teacher_id=unit_id=None
+        else:
+            code=str(row.get('course_code') or '').strip()
+            issues,teacher_id,unit_id=course_row_issues(row,db)
         if code and (code in seen or db.query(Course.id).filter_by(course_code=code).first()):
             if not issues:status='duplicate'
             else:status='invalid'
@@ -112,6 +125,172 @@ def confirm_courses_xlsx(data:XlsxConfirmInput,user=Depends(require_user),db:Ses
         db.add(PlanningEvent(plan_id=None,actor=f"{'demo' if getattr(user,'is_demo',False) else 'user'}:{user.id}",
             action='import_courses_xlsx',payload=result))
     return {'success':True,**result,'summary':f'成功导入{imported}门课程，跳过重复或无效记录{skipped}条'}
+
+
+@router.get('/xlsx/academic-catalog/template', summary='下载专业方向与教研室目录模板')
+def academic_catalog_template():
+    from pathlib import Path
+    path=Path(__file__).resolve().parents[1]/'templates'/'academic_catalog_template.xlsx'
+    return FileResponse(path,filename='专业方向与专业代码目录模板.xlsx',
+                        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+
+@router.post('/xlsx/academic-catalog/preview', summary='预览专业方向与教研室目录导入')
+async def preview_academic_catalog_xlsx(file:UploadFile=File(...),user=Depends(require_user),db:Session=Depends(get_db)):
+    from app.services.authorization import check
+    from app.services.spreadsheet_import import parse_academic_catalog_workbook
+    from app.models.planning import AcademicDirection
+    check(user,'admin')
+    if not file.filename or not file.filename.lower().endswith('.xlsx'):
+        raise HTTPException(400,'请上传.xlsx格式的专业目录文件')
+    content=await file.read(10*1024*1024+1)
+    if len(content)>10*1024*1024:raise HTTPException(413,'文件不能超过10MB')
+    try:programs,parse_errors,warnings=parse_academic_catalog_workbook(content)
+    except Exception as exc:raise HTTPException(422,f'Excel解析失败：{exc}') from exc
+    if not programs:raise HTTPException(422,'没有找到可导入的专业方向目录记录')
+    from hashlib import sha1
+    studio_codes={
+        '视觉策略与叙事设计教研室':'DEPT-01',
+        '包装系统与可持续设计教研室':'DEPT-02',
+        '数字艺术与媒介创新教研室':'DEPT-03',
+        '视觉系统与时尚传播教研室':'DEPT-04',
+        '智能交互与体验设计教研室':'DEPT-05',
+    }
+    preview_programs=[];preview_directions=[]
+    counts={'new':0,'update':0,'unchanged':0,'invalid':0}
+    seen_program_codes=set();seen_directions=set()
+    for item in programs:
+        issues=[]
+        if item['code'] in seen_program_codes:issues.append('文件内专业代码重复')
+        seen_program_codes.add(item['code'])
+        existing=db.query(AcademicProgram).filter_by(code=item['code']).first()
+        if not existing:existing=db.query(AcademicProgram).filter_by(name=item['name']).first()
+        if not existing and item['code']=='130508':
+            existing=db.query(AcademicProgram).filter_by(name='数字媒体艺术（交互设计）').first()
+        data={key:value for key,value in item.items() if key!='directions'}
+        if existing:
+            data['id']=existing.id
+            if existing.name!=item['name'] and not (item['code']=='130508' and existing.name=='数字媒体艺术（交互设计）'):
+                issues.append(f'现有代码/名称冲突：{existing.code} / {existing.name}')
+            if existing.code!=item['code'] and not existing.code.startswith('LEGACY-'):
+                issues.append(f'现有专业编码为{existing.code}，不会自动覆盖')
+            if existing.name=='数字媒体艺术（交互设计）' and item['code']=='130508':
+                data['rename_alias']=True
+            changed=(existing.code!=item['code'] or existing.name!=item['name'] or any(
+                getattr(existing,key)!=data.get(key) for key in ('education_level','degree_category','duration_semesters','construction_level','source_notes')))
+            status='update' if changed else 'unchanged'
+        else:
+            data['id']=None;status='new'
+        if issues:status='invalid'
+        counts[status]+=1
+        preview_programs.append({'status':status,'issues':issues,'data':data})
+        for direction in item['directions']:
+            d_issues=[]
+            key=(item['code'],direction['entry_type'],direction['name'])
+            if key in seen_directions:d_issues.append('文件内方向/招生口径重复')
+            seen_directions.add(key)
+            unit_name=direction.get('offering_unit_name')
+            unit_code=studio_codes.get(unit_name)
+            unit=(db.query(OfferingUnit).filter_by(code=unit_code).first() if unit_code else None)
+            if not unit and unit_name:unit=db.query(OfferingUnit).filter_by(name=unit_name).first()
+            if unit:
+                resolved_unit_id=unit.id;resolved_unit_name=unit.name
+                if unit_name and unit.name!=unit_name:
+                    warnings.append(f'教研室“{unit_name}”将关联现有自定义名称“{unit.name}”（目录编码{unit.code}）')
+            elif unit_name:
+                unit_code=unit_code or ('XLSX-'+sha1(unit_name.encode('utf-8')).hexdigest()[:12].upper())
+                resolved_unit_id=None;resolved_unit_name=unit_name
+            else:
+                unit_code=None;resolved_unit_id=None;resolved_unit_name=None
+                d_issues.append('未填写对应教研室')
+            program_id=existing.id if existing else None
+            old_direction=None
+            if program_id:
+                old_direction=db.query(AcademicDirection).filter_by(program_id=program_id,name=direction['name'],entry_type=direction['entry_type']).first()
+            d_data={**direction,'program_code':item['code'],'program_name':item['name'],
+                    'program_id':program_id,'direction_id':old_direction.id if old_direction else None,
+                    'unit_code':unit_code,'resolved_unit_id':resolved_unit_id,'resolved_unit_name':resolved_unit_name}
+            if old_direction:
+                changed=(old_direction.offering_unit_id!=resolved_unit_id or old_direction.notes!=direction.get('notes') or old_direction.source_order!=direction['source_order'])
+                d_status='update' if changed else 'unchanged'
+            else:d_status='new'
+            if issues:d_issues.extend(issues)
+            if d_issues:d_status='invalid'
+            counts[d_status]+=1
+            preview_directions.append({'status':d_status,'issues':d_issues,'data':d_data})
+    token=secrets.token_urlsafe(32)
+    batch=ImportPreviewBatch(entity_type='academic_catalog',filename=file.filename[:200],
+        file_sha256=hashlib.sha256(content).hexdigest(),token_hash=hashlib.sha256(token.encode()).hexdigest(),
+        status='pending',payload={'programs':preview_programs,'directions':preview_directions,
+            'counts':counts,'parse_errors':parse_errors,'warnings':list(dict.fromkeys(warnings))},
+        expires_at=datetime.utcnow()+timedelta(minutes=30))
+    db.add(batch);db.commit();db.refresh(batch)
+    rows=[{'kind':'专业','code':x['data']['code'],'name':x['data']['name'],'status':x['status'],'issues':x['issues']} for x in preview_programs]
+    rows += [{'kind':'方向 / 招生口径','code':x['data']['program_code'],'name':x['data']['name'],
+              'unit':x['data']['resolved_unit_name'],'status':x['status'],'issues':x['issues']} for x in preview_directions]
+    return {'preview_id':batch.id,'token':token,'expires_at':batch.expires_at,'counts':counts,
+            'rows':rows,'parse_errors':parse_errors,'warnings':list(dict.fromkeys(warnings)),
+            'file_sha256':batch.file_sha256}
+
+
+@router.post('/xlsx/academic-catalog/confirm', summary='确认专业方向与教研室目录导入')
+def confirm_academic_catalog_xlsx(data:XlsxConfirmInput,user=Depends(require_user),db:Session=Depends(get_db)):
+    from app.services.authorization import check
+    from app.api.planning import write
+    check(user,'admin')
+    batch=db.get(ImportPreviewBatch,data.preview_id)
+    supplied=hashlib.sha256(data.token.encode()).hexdigest()
+    if not batch or batch.entity_type!='academic_catalog' or not secrets.compare_digest(batch.token_hash,supplied):
+        raise HTTPException(404,'导入预览不存在或令牌无效')
+    if batch.status!='pending':raise HTTPException(409,'该导入预览已确认或失效')
+    if batch.expires_at<datetime.utcnow():raise HTTPException(409,'导入预览已过期，请重新上传')
+    from app.models.planning import AcademicCatalogSeed
+    with write(db):
+        payload=batch.payload;counts={'created_programs':0,'updated_programs':0,'created_directions':0,'updated_directions':0,'skipped':0}
+        program_ids={}
+        for item in payload['programs']:
+            if item['status']=='invalid':counts['skipped']+=1;continue
+            row=item['data'];program=db.get(AcademicProgram,row['id']) if row.get('id') else None
+            if not program:
+                program=AcademicProgram(code=row['code'],name=row['name'],duration_semesters=row['duration_semesters'],
+                    education_level=row['education_level'],degree_category=row['degree_category'],
+                    construction_level=row['construction_level'],source_notes=row['source_notes'])
+                db.add(program);db.flush();counts['created_programs']+=1
+            else:
+                changed=item['status']=='update'
+                if changed:
+                    program.code=row['code'];program.name=row['name']
+                    for key in ('education_level','degree_category','duration_semesters','construction_level','source_notes'):
+                        setattr(program,key,row[key])
+                    counts['updated_programs']+=1
+            program_ids[row['code']]=program.id
+        db.flush()
+        for item in payload['directions']:
+            row=item['data']
+            if item['status']=='invalid' or row['program_code'] not in program_ids:
+                counts['skipped']+=1;continue
+            if item['status']=='unchanged':
+                continue
+            unit=None
+            if row.get('unit_code'):
+                unit=db.query(OfferingUnit).filter_by(code=row['unit_code']).first()
+                if not unit:
+                    unit=db.query(OfferingUnit).filter_by(name=row['offering_unit_name']).first()
+                if not unit:
+                    unit=OfferingUnit(code=row['unit_code'],name=row['offering_unit_name']);db.add(unit);db.flush()
+            direction=db.get(AcademicDirection,row['direction_id']) if row.get('direction_id') else None
+            if not direction:
+                direction=AcademicDirection(program_id=program_ids[row['program_code']],name=row['name'],entry_type=row['entry_type'])
+                db.add(direction);counts['created_directions']+=1
+            else:counts['updated_directions']+=1
+            direction.program_id=program_ids[row['program_code']];direction.name=row['name'];direction.entry_type=row['entry_type']
+            direction.offering_unit_id=unit.id if unit else None;direction.notes=row.get('notes');direction.source_order=row['source_order']
+        batch.status='confirmed'
+        result={**counts,'file_sha256':batch.file_sha256};payload['result']=result;batch.payload=payload
+        db.add(PlanningEvent(plan_id=None,actor=f"{'demo' if getattr(user,'is_demo',False) else 'user'}:{user.id}",
+            action='import_academic_catalog_xlsx',payload=result))
+        db.merge(AcademicCatalogSeed(seed_key='vcd-professional-directory-v1'))
+    return {'success':True,**result,'summary':f"导入完成：新增专业{counts['created_programs']}个，更新{counts['updated_programs']}个；新增方向/招生口径{counts['created_directions']}条，更新{counts['updated_directions']}条，跳过{counts['skipped']}条"}
 
 
 @router.get("/template/{entity_type}", summary="下载CSV导入模板")
@@ -228,13 +407,48 @@ async def import_csv(entity_type: str, file: UploadFile = File(...), cohort: str
                 row['program_id']=program.id
             elif row.get('department'):
                 exact=db.query(AcademicProgram).filter_by(name=row['department'].strip()).first()
-                if exact:row['program_id']=exact.id
+                if exact:row['program_id']=exact.id;row['department']=exact.name
+                elif db.query(AcademicProgram.id).first():scope_errors.append(f"班级“{row.get('name')}”的所属专业“{row['department']}”不在管理员专业目录中")
+            if row.get('program_id'):
+                row['department']=db.get(AcademicProgram,row['program_id']).name
     elif entity_type=='courses':
         for row in pending_rows:
             code=(row.pop('offering_unit_code',None) or '').strip()
             unit=db.query(OfferingUnit).filter_by(code=code).first() if code else None
             if code and not unit:scope_errors.append(f"课程“{row.get('name')}”的开课单位编码“{code}”不存在")
             elif unit:row['offering_unit_id']=unit.id
+            program_code=(row.pop('program_code',None) or '').strip()
+            program=db.query(AcademicProgram).filter_by(code=program_code).first() if program_code else None
+            if program_code and not program:scope_errors.append(f"课程“{row.get('name')}”的专业编码“{program_code}”不存在")
+            elif program:
+                if row.get('department') and row['department'].strip()!=program.name:
+                    scope_errors.append(f"课程“{row.get('name')}”的专业名称与编码{program_code}不一致")
+                row['program_id']=program.id;row['department']=program.name
+            elif row.get('department'):
+                program=db.query(AcademicProgram).filter_by(name=row['department'].strip()).first()
+                if program:
+                    row['program_id']=program.id;row['department']=program.name
+                elif db.query(AcademicProgram.id).first():
+                    scope_errors.append(f"课程“{row.get('name')}”的适用专业“{row['department']}”不在管理员专业目录中")
+            direction_name=(row.pop('direction_name',None) or '').strip()
+            if direction_name:
+                from app.models.planning import AcademicDirection
+                direction=db.query(AcademicDirection).filter_by(program_id=program.id if program else None,
+                    name=direction_name,entry_type='专业方向').first() if program else None
+                if not direction:scope_errors.append(f"课程“{row.get('name')}”未找到对应专业方向“{direction_name}”")
+                else:
+                    row['direction_id']=direction.id
+                    if direction.offering_unit_id:row['offering_unit_id']=direction.offering_unit_id
+    elif entity_type=='teachers':
+        for row in pending_rows:
+            unit_code=(row.pop('offering_unit_code',None) or '').strip()
+            unit=db.query(OfferingUnit).filter_by(code=unit_code).first() if unit_code else None
+            if unit_code and not unit:scope_errors.append(f"教师“{row.get('name')}”的教研室编码“{unit_code}”不存在")
+            elif unit:row['offering_unit_id']=unit.id;row['department']=unit.name
+            elif row.get('department'):
+                unit=db.query(OfferingUnit).filter_by(name=row['department'].strip()).first()
+                if not unit and db.query(OfferingUnit.id).first():scope_errors.append(f"教师“{row.get('name')}”的所属部门“{row['department']}”不在管理员教研室目录中")
+                else:row['offering_unit_id']=unit.id;row['department']=unit.name
     if scope_errors:
         return {'success':False,'imported':0,'skipped':len(skipped_reasons),'total':len(data_rows),
                 'errors':scope_errors,'warnings':skipped_reasons,
@@ -265,6 +479,13 @@ async def import_csv(entity_type: str, file: UploadFile = File(...), cohort: str
             return {'success':False,'imported':0,'skipped':len(skipped_reasons),'total':len(data_rows),
                     'errors':leader_errors,'warnings':skipped_reasons,
                     'summary':f"课程负责人校验未通过，本次未导入任何记录（共{len(data_rows)}条，跳过{len(skipped_reasons)}条重复记录）"}
+        try:
+            from app.services.course_codes import assign_course_codes
+            assign_course_codes(db,pending_rows)
+        except HTTPException as exc:
+            return {'success':False,'imported':0,'skipped':len(skipped_reasons),'total':len(data_rows),
+                    'errors':[str(exc.detail)],'warnings':skipped_reasons,
+                    'summary':'自动课程编码校验未通过，本次未导入任何记录'}
 
     imported_count = 0
     import_errors = []
