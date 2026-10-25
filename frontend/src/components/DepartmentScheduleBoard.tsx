@@ -56,13 +56,13 @@ export default function DepartmentScheduleBoard({plan,tasks,busy,onRefresh}:{pla
     finally{setSaving(false);}
   };
   const submit=save;
-  const reviewApplicant=(applicant:any,approved:boolean)=>{
+  const reviewApplicant=(applicant:any,approved:boolean,task:any=selected)=>{
     let reason=approved?'已核对教师任课资格与负荷':'请补充或调整申报信息';
     Modal.confirm({title:approved?'通过教师课程初审':'退回教师课程申请',
       content:<Input.TextArea aria-label="教师初审意见" defaultValue={reason} onChange={event=>{reason=event.target.value;}}/>,
       onOk:async()=>{
         if(!reason.trim()){message.error('请填写审核意见');throw new Error('请填写审核意见');}
-        try{await planningApi.decideDepartmentReview(selected.plan_id||plan.id,{submission_id:applicant.submission_id,task_id:selected.id,approved,reason});message.success('教师初审已保存');onRefresh();}
+        try{await planningApi.decideDepartmentReview(task.plan_id||plan.id,{submission_id:applicant.submission_id,task_id:task.id,approved,reason});message.success('教师初审已保存');onRefresh();}
         catch(error){message.error(error instanceof Error?error.message:'教师初审保存失败');throw error;}
       }});
   };
@@ -154,7 +154,7 @@ export default function DepartmentScheduleBoard({plan,tasks,busy,onRefresh}:{pla
     {title:'选课课程',render:(_:unknown,row:any)=><><b>{row.task.name}</b><div>{row.task.major||row.task.department} · {row.task.cohort}级 · {row.task.group}</div></>},
     {title:'周期 / 周段',render:(_:unknown,row:any)=><>{row.plan_name}<div>第{row.task.start_week||'—'}–{row.task.end_week||'—'}周</div></>},
     {title:'审核状态',dataIndex:'review_status',render:(value:string)=><Tag color={value==='approved'?'green':value==='returned'?'red':value==='pending'?'orange':'default'}>{value==='approved'?'已通过':value==='returned'?'已退回':value==='pending'?'待审核':'原流程'}</Tag>},
-    {title:'审核',render:(_:unknown,row:any)=><Space><Button size="small" type="primary" disabled={busy||!row.selected||!['pending','returned'].includes(row.review_status)} onClick={()=>{setSelected(row.task);reviewApplicant(row,true);}}>通过</Button><Button size="small" danger disabled={busy||!row.selected||!['pending','returned'].includes(row.review_status)} onClick={()=>{setSelected(row.task);reviewApplicant(row,false);}}>退回</Button></Space>},
+    {title:'审核',render:(_:unknown,row:any)=><Space><Button size="small" type="primary" disabled={busy||!row.selected||!['pending','returned'].includes(row.review_status)} onClick={()=>{reviewApplicant(row,true,row.task);}}>通过</Button><Button size="small" danger disabled={busy||!row.selected||!['pending','returned'].includes(row.review_status)} onClick={()=>{reviewApplicant(row,false,row.task);}}>退回</Button></Space>},
     {title:'教师调整',render:(_:unknown,row:any)=><Button size="small" disabled={!row.selected||busy||!departmentScheduleEditable(row.task)} onClick={()=>open(row.task)}>修改课程教师</Button>},
   ]}/>;
   return <Tabs defaultActiveKey="teachers" items={[{key:'teachers',label:`教师选课 · ${teacherRows.length}`,children:teacherView},{key:'schedule',label:'课程甘特图',children:scheduleView}]}/>;

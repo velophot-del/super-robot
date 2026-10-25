@@ -6,7 +6,7 @@ import dayjs from 'dayjs';
 import { useAuth } from '../contexts/AuthContext';
 import { can } from '../lib/accessPolicy';
 import { planningApi as api } from '../api/planning';
-import { classApi, classroomApi } from '../api/client';
+import { classApi, classroomApi, intelligenceApi } from '../api/client';
 import ProfessionalExport from '../components/ProfessionalExport';
 import TeacherSelectionPage from './TeacherSelectionPage';
 import { taskLimitsPayload, taskCourseInfo } from '../lib/taskForm';
@@ -39,6 +39,9 @@ export function ManagementPlanningWorkspace({section='plan'}:{section?:'plan'|'r
   const [planInfoOpen,setPlanInfoOpen]=useState(false);
   const [modal,setModal]=useState<'plan'|'task'|'profile'|null>(null), [profileId,setProfileId]=useState<number>();
   const [editingTask,setEditingTask]=useState<any>();
+  const [autoBuild,setAutoBuild]=useState<any>();
+  const [matchExplain,setMatchExplain]=useState<any>();
+  const [qaQ,setQaQ]=useState(''), [qaA,setQaA]=useState(''), [qaBusy,setQaBusy]=useState(false);
   const [rooms,setRooms]=useState<any[]>([]);
   const [roomsLoading,setRoomsLoading]=useState(false);
   const [form]=Form.useForm();
@@ -117,6 +120,34 @@ export function ManagementPlanningWorkspace({section='plan'}:{section?:'plan'|'r
       setModal(null);await load();message.success('已保存');
     }catch(e){message.error(e instanceof Error?e.message:'保存失败');}finally{setBusy(false);}
   };
+  const doAutoBuild=async(teacher:any)=>{
+    setBusy(true);
+    try{const result:any=await api.autoBuildProfile(teacher.id);setAutoBuild({teacher,result});}
+    catch(e){message.error(e instanceof Error?e.message:'画像构建失败');}
+    finally{setBusy(false);}
+  };
+  const confirmAutoBuild=async()=>{
+    if(!autoBuild)return;const p=autoBuild.result.proposal;
+    setBusy(true);
+    try{
+      await api.saveProfile(autoBuild.teacher.id,{direction:p.direction,tags:p.tags,team_codes:p.team_codes||[],taught_codes:p.taught_codes||[],verified:true,weekly_limit:20,course_limit:3,external_hours:{}});
+      setAutoBuild(undefined);await load();message.success('画像已按建议写入');
+    }catch(e){message.error(e instanceof Error?e.message:'写入失败');}finally{setBusy(false);}
+  };
+  const loadMatchExplanations=async()=>{
+    if(!id)return;
+    setBusy(true);
+    try{const result:any=await api.matchExplanations(id);setMatchExplain(result);}
+    catch(e){message.error(e instanceof Error?e.message:'解释生成失败');}
+    finally{setBusy(false);}
+  };
+  const askQa=async()=>{
+    if(!qaQ.trim())return;
+    setQaBusy(true);
+    try{const result:any=await intelligenceApi.qa(qaQ.trim());setQaA(result.answer||'');}
+    catch(e){message.error(e instanceof Error?e.message:'问答失败');}
+    finally{setQaBusy(false);}
+  };
   const tasks:any[]=state?.tasks||[];
   const taskName=(taskId:number)=>tasks.find(t=>t.id===taskId)?.name||String(taskId);
   const reviewPlans:any[]=reviewBatch.plans||[];
@@ -137,6 +168,7 @@ export function ManagementPlanningWorkspace({section='plan'}:{section?:'plan'|'r
       <Button type="primary" loading={busy} disabled={!state.rule_confirmed||!['open','matched'].includes(state.state)} onClick={()=>void action(()=>api.match(id!))}>运行系统匹配（自动落位） / 保留锁定重跑</Button>
       <Button icon={<RobotOutlined/>} loading={busy} disabled={!state.rule_confirmed||!['open','matched'].includes(state.state)} onClick={()=>void aiMatch()}>AI 排序并自动落位</Button>
       <Text>已提交教师：{state.submission_count??'—'}</Text>
+      {state.match&&<Button loading={busy} onClick={()=>void loadMatchExplanations()}>AI 解释匹配理由</Button>}
       {state.match?.ai?.used&&<Tag color="purple">AI 排序{state.match.ai.applied?` · 落位${state.match.ai.applied}门`:' · 未采用'}</Tag>}
     </Space>}
     {admin&&!state.rule_confirmed&&<Alert type="warning" showIcon title="请先确认当前匹配规则，再运行自动匹配"/>}
@@ -148,7 +180,10 @@ export function ManagementPlanningWorkspace({section='plan'}:{section?:'plan'|'r
         {title:'专业适配度',render:(_,r:any)=>r.professional_fit==null?<Tag color="orange">资料待核实</Tag>:`${r.professional_fit}%`},
         {title:'综合推荐',render:(_,r:any)=>r.raw_total==null?'待核实':`${r.raw_total}/${r.maximum??state.match?.maximum??state.match_weight_total??95} (${r.normalized_total}%)`},
         {title:'硬约束',render:(_,r:any)=>r.eligible?<Tag color="green">可审核</Tag>:<Text type="danger">{r.reasons.join('；')}</Text>},
-      ]} expandable={{expandedRowRender:(r:any)=><Space wrap>{r.components.map((c:any)=><Tag key={c.name}>{c.name}：{c.score??'未知'}/{c.maximum}{c.hits?.length?` · 命中${c.hits.join('、')}`:''}</Tag>)}</Space>}}/>:admin?<Empty description="尚未运行匹配"/>:null}
+      ]} expandable={{expandedRowRender:(r:any)=><Space direction="vertical" size="small" style={{width:'100%'}}>
+        {r.explanation&&<Text type="secondary">{r.explanation}</Text>}
+        <Space wrap>{r.components.map((c:any)=><Tag key={c.name}>{c.name}：{c.score??'未知'}/{c.maximum}{c.hits?.length?` · 命中${c.hits.join('、')}`:''}</Tag>)}</Space>
+      </Space>}}/>:admin?<Empty description="尚未运行匹配"/>:null}
     {review&&<Card title={admin?"全学院实时课表与人工调剂":"本教研室实时课表与教师审核"}>
       {admin&&<Space wrap style={{marginBottom:12,width:'100%'}}>
         <Text strong>调剂说明</Text>
@@ -175,11 +210,18 @@ export function ManagementPlanningWorkspace({section='plan'}:{section?:'plan'|'r
   const tabs:any[]=[];
   if(admin)tabs.push({key:'pool',label:'课程表编排',children:<AdminStagePlanner key={state.id} plan={state} classes={classes} onChange={load} onEdit={task=>openModal('task',task)}/>});
   tabs.push({key:'match',label:review?'匹配与审核':'我的匹配结果',children:matchView});
-  if(admin)tabs.push({key:'profiles',label:'教师专业画像',children:<Table rowKey="id" dataSource={profiles} pagination={false} columns={[{title:'教师',dataIndex:'name'},{title:'方向',dataIndex:'direction'},{title:'领域',render:(_,p:any)=>p.tags.join('、')},{title:'资料来源',render:(_,p:any)=>p.professional_profile_source==='self_declared'?'教师自填':'管理员登记'},{title:'管理记录核实',render:(_,p:any)=>p.verified?'已核对':'待核对'},{title:'操作',render:(_,p:any)=><Button onClick={()=>openModal('profile',p)}>维护画像 / 外部课时</Button>}]}/>});
+  if(admin)tabs.push({key:'profiles',label:'教师专业画像',children:<Table rowKey="id" dataSource={profiles} pagination={false} columns={[{title:'教师',dataIndex:'name'},{title:'方向',dataIndex:'direction'},{title:'领域',render:(_,p:any)=>p.tags.join('、')},{title:'资料来源',render:(_,p:any)=>p.professional_profile_source==='self_declared'?'教师自填':'管理员登记'},{title:'管理记录核实',render:(_,p:any)=>p.verified?'已核对':'待核对'},{title:'操作',render:(_,p:any)=><Space><Button onClick={()=>openModal('profile',p)}>维护画像 / 外部课时</Button><Button loading={busy} onClick={()=>void doAutoBuild(p)}>自动构建画像</Button></Space>}]}/>});
 
   return <div>
     <Title level={3}>{section==='plan'?'排课周期计划':!admin&&user?.grants?.some(g=>g.capability==='lead')?'教研室主任审核':'匹配与审核'}</Title>
     <Paragraph>教师先选课并提交意愿，系统提供专业匹配依据，审核确认后分配。每教学组同周最多2门、同日1门。</Paragraph>
+    {admin&&<Card size="small" title="智能问答" style={{marginBottom:16}} extra={<Text type="secondary">用自然语言问系统，如「还有哪门必修课没排」</Text>}>
+      <Space.Compact style={{width:'100%'}}>
+        <Input aria-label="智能问答输入" placeholder="例如：这学期哪个教研室负荷最重？" value={qaQ} onChange={e=>setQaQ(e.target.value)} onPressEnter={()=>void askQa()}/>
+        <Button type="primary" loading={qaBusy} onClick={()=>void askQa()}>提问</Button>
+      </Space.Compact>
+      {qaA&&<Alert style={{marginTop:8}} type="info" showIcon title={qaA}/>}
+    </Card>}
     <Space wrap style={{marginBottom:20}}><Select aria-label="排课周期" style={{minWidth:260}} placeholder="选择排课周期" value={id} onChange={v=>{setState(undefined);setId(v);}} options={plans.map(p=>({value:p.id,label:`${p.name} · ${stateNames[p.state]}`}))}/>
       <Button onClick={()=>void load()}>刷新</Button>{section==='plan'&&admin&&<Button type="primary" onClick={()=>openModal('plan')}>新建排课周期</Button>}
     {section==='plan'&&admin&&state?.state==='draft'&&<><Text type="secondary">新增任务请从导入课程库拖入班级课表</Text><Button loading={busy} disabled={!tasks.length} onClick={()=>void action(()=>api.open(id!))}>开放教师填报</Button></>}
@@ -262,6 +304,33 @@ export function ManagementPlanningWorkspace({section='plan'}:{section?:'plan'|'r
           <Form.Item name="verified" valuePropName="checked"><Checkbox>团队、曾授记录及课时容量已核实</Checkbox></Form.Item>
         </>}
       </Form>
+    </Modal>
+    <Modal title={`自动构建画像 · ${autoBuild?.teacher?.name||''}`} open={!!autoBuild} onCancel={()=>setAutoBuild(undefined)} onOk={()=>void confirmAutoBuild()} confirmLoading={busy} okText="确认写入画像" width={640} destroyOnHidden>
+      {autoBuild&&<Space direction="vertical" size="middle" style={{width:'100%'}}>
+        <Alert type={autoBuild.result?.source==='llm'?'success':'info'} showIcon
+          title={autoBuild.result?.source==='llm'?'已由 AI 结合历史授课记录生成':'未配置 AI，按历史授课记录汇总'}
+          description={autoBuild.result?.reason}/>
+        <Descriptions bordered size="small" column={1} items={[
+          {key:'direction',label:'专业方向',children:autoBuild.result?.proposal?.direction||'—'},
+          {key:'tags',label:'领域标签',children:(autoBuild.result?.proposal?.tags||[]).join('、')||'—'},
+          {key:'skilled',label:'擅长课程',children:(autoBuild.result?.proposal?.skilled_courses||[]).join('、')||'—'},
+          {key:'taught',label:'曾授课程编码',children:(autoBuild.result?.proposal?.taught_codes||[]).join('、')||'—'},
+          {key:'rationale',label:'依据',children:autoBuild.result?.proposal?.rationale||'—'},
+        ]}/>
+      </Space>}
+    </Modal>
+    <Modal title="AI 匹配理由" open={!!matchExplain} onCancel={()=>setMatchExplain(undefined)} footer={<Button onClick={()=>setMatchExplain(undefined)}>关闭</Button>} width={680} destroyOnHidden>
+      {matchExplain&&<Space direction="vertical" size="middle" style={{width:'100%'}}>
+        <Alert type={matchExplain.source==='llm'?'success':'info'} showIcon
+          title={matchExplain.source==='llm'?'已由 AI 生成推荐理由':'未配置 AI，展示规则理由'}
+          description={matchExplain.reason}/>
+        <Table rowKey={(r:any)=>`${r.task_id}-${r.teacher_id}`} size="small" dataSource={matchExplain.items||[]} pagination={false}
+          columns={[
+            {title:'课程',render:(_,r:any)=>taskName(r.task_id)},
+            {title:'教师',dataIndex:'teacher_name'},
+            {title:'推荐理由',dataIndex:'reason'},
+          ]}/>
+      </Space>}
     </Modal>
   </div>;
 }

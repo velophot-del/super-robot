@@ -4,6 +4,7 @@ from fastapi import HTTPException
 from app.models.planning import AcademicPlan, TeachingTask, PeriodSlot, TeachingAssignment
 from app.models.classroom import Classroom
 from app.services.cohort_calendar import cohort_weeks, cohort_start_date, cohort_exam_weeks
+from app.services.plan_versions import superseded_plan_ids
 
 
 def task_dict(db, task):
@@ -106,9 +107,10 @@ def validate_tasks(db, plan, tasks, check_slots=True):
         return
     published_tasks = []
     # Published plans reserve both rooms and student groups on actual dates.
+    superseded = superseded_plan_ids(db)
     published_rows = [(other_plan, other)
                       for other_plan in db.query(AcademicPlan).filter(AcademicPlan.state == 'published', AcademicPlan.id != plan.id)
-                      if other_plan.id != (plan.settings or {}).get('supersedes_plan_id')
+                      if other_plan.id not in superseded and other_plan.id != (plan.settings or {}).get('supersedes_plan_id')
                       for other in db.query(TeachingTask).filter_by(plan_id=other_plan.id)]
     for other_plan, other in published_rows:
         data = task_dict(db, other)

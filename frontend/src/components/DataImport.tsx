@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { Upload, Button, Space, Typography, Alert, message, Table, Tag, Modal, Card } from 'antd';
 import { InboxOutlined, DownloadOutlined, UploadOutlined, ImportOutlined } from '@ant-design/icons';
-import { ioApi } from '../api/client';
+import { ioApi, intelligenceApi } from '../api/client';
 import { gradeLabel } from '../lib/adminStageGrid';
 
 const { Text } = Typography;
@@ -20,6 +20,8 @@ export function DataImportPanel({ entityType, cohort, onImported }: {
   const [result, setResult] = useState<any>(null);
   const [xlsxPreview, setXlsxPreview] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  const [aiReview, setAiReview] = useState<any>(null);
+  const [aiBusy, setAiBusy] = useState(false);
 
   const handleDownloadTemplate = async () => {
     try {
@@ -35,6 +37,24 @@ export function DataImportPanel({ entityType, cohort, onImported }: {
       message.success('模板下载成功');
     } catch (e: any) {
       message.error(`下载失败: ${e.message}`);
+    }
+  };
+
+  const handleAiReview = async () => {
+    if (!file) return;
+    setAiBusy(true);
+    setAiReview(null);
+    try {
+      const kind = entityType === 'teachers' ? 'teacher' : 'course';
+      const res: any = await intelligenceApi.reviewImportFile(kind, file);
+      setAiReview(res);
+      const dup = res.review?.duplicates?.length ?? 0;
+      const iss = res.review?.issues?.length ?? 0;
+      message.info(`智能清洗完成：疑似重复 ${dup} 组，格式问题 ${iss} 条`);
+    } catch (e: any) {
+      message.error(`智能清洗失败: ${e.message}`);
+    } finally {
+      setAiBusy(false);
     }
   };
 
@@ -106,6 +126,42 @@ export function DataImportPanel({ entityType, cohort, onImported }: {
       <Button type="primary" icon={<UploadOutlined />} onClick={handleImport} loading={loading} disabled={!file} size="large">
         开始导入
       </Button>
+      {(entityType === 'teachers' || entityType === 'courses') && (
+        <Button onClick={() => void handleAiReview()} loading={aiBusy} disabled={!file}>
+          AI 智能清洗（去重 / 纠错）
+        </Button>
+      )}
+
+      {aiReview && (
+        <Card title={`AI 智能清洗 · ${aiReview.records_count} 条记录`}>
+          {aiReview.parse_errors?.length > 0 && (
+            <Alert type="warning" showIcon style={{ marginBottom: 8 }} message="解析警告" description={aiReview.parse_errors.join('；')} />
+          )}
+          {aiReview.review?.duplicates?.length > 0 && (
+            <div style={{ marginBottom: 8 }}>
+              <Text strong style={{ color: '#f59e0b' }}>疑似重复（同一实体多种写法）：</Text>
+              <ul style={{ marginTop: 4 }}>
+                {aiReview.review.duplicates.map((d: any, i: number) => (
+                  <li key={i}><Text type="warning">「{d.members?.join('」/「')}」→ 建议规范为「{d.canonical}」</Text> <Text type="secondary">（{d.reason}）</Text></li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {aiReview.review?.issues?.length > 0 && (
+            <div>
+              <Text strong style={{ color: '#ea2261' }}>格式 / 数据问题：</Text>
+              <ul style={{ marginTop: 4 }}>
+                {aiReview.review.issues.map((iss: any, i: number) => (
+                  <li key={i}><Text type="danger">{iss.name}：{iss.message}</Text> <Text type="secondary">→ {iss.suggestion}</Text></li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {!aiReview.review?.duplicates?.length && !aiReview.review?.issues?.length && (
+            <Alert type="success" showIcon message="未发现疑似重复或格式问题" />
+          )}
+        </Card>
+      )}
 
       {entityType === 'teachers' && (
         <Alert type="info" showIcon message="教师导入会创建工号登录账号，初始密码为123456；首次登录必须修改密码并完善资料。重复导入不重置密码，账号冲突不会自动覆盖。" />

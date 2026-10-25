@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Descriptions, Drawer, Empty, Modal, Result, Select, Space, Spin, Tag, Typography, message } from 'antd';
+import { Alert, Button, Card, Descriptions, Drawer, Empty, Modal, Result, Select, Space, Spin, Tag, Typography, message } from 'antd';
 import { Link, Navigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { ReloadOutlined, SearchOutlined } from '@ant-design/icons';
@@ -8,6 +8,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { can } from '../lib/accessPolicy';
 import { gradeLabel, normalizeCohort, stageClassScope } from '../lib/adminStageGrid';
 import { planningApi as api } from '../api/planning';
+import { intelligenceApi } from '../api/client';
 import { openSelectionPlans } from '../lib/teacherWorkbench';
 import { academicYear,filterSelectionPlans,selectionSlots } from '../lib/selectionGrid';
 import StageSelectionTable from '../components/StageSelectionTable';
@@ -26,6 +27,8 @@ export default function TeacherSelectionPage(){
   const [cohort,setCohort]=useState('all'),[search,setSearch]=useState('');
   const [ready,setReady]=useState<boolean>(),[loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState('');
   const [detail,setDetail]=useState<{planId:number;task:any;week:number}>();
+  const [recommend,setRecommend]=useState<any>();
+  const [qaQ,setQaQ]=useState(''), [qaA,setQaA]=useState(''), [qaBusy,setQaBusy]=useState(false);
   const teaching=can(user,'teaching');
   const [now,setNow]=useState(Date.now());
   // 只在最近一个填报截止时间唤醒，避免整页每秒重渲染。
@@ -47,6 +50,20 @@ export default function TeacherSelectionPage(){
     }catch(e){setError(e instanceof Error?e.message:'读取选课信息失败');}finally{setLoading(false);}
   },[teaching]);
   useEffect(()=>{void bootstrap();},[bootstrap]);
+  useEffect(()=>{
+    if(!teaching)return;
+    const list=openSelectionPlans<any>(allPlans);
+    const target=list.find(editable)||list[0];
+    if(!target){setRecommend(undefined);return;}
+    intelligenceApi.recommend(target.id).then(setRecommend).catch(()=>setRecommend(undefined));
+  },[allPlans,teaching]);
+  const askMyQa=async()=>{
+    if(!qaQ.trim())return;
+    setQaBusy(true);
+    try{const result:any=await intelligenceApi.myQa(qaQ.trim());setQaA(result.answer||'');}
+    catch(e){message.error(e instanceof Error?e.message:'问答失败');}
+    finally{setQaBusy(false);}
+  };
   const filtered=useMemo(()=>filterSelectionPlans(openSelectionPlans(plans,now),year,term,major),[plans,now,year,term,major]);
   // 选课阶段只显示按 25 人基数计算的预估课时；全部开放周期结束后再显示真实工作量。
   const selectionActive=plans.some((p:any)=>p.state==='open'&&new Date(p.deadline).getTime()>now);
@@ -129,6 +146,22 @@ export default function TeacherSelectionPage(){
     <Space wrap style={{width:'100%',justifyContent:'space-between'}}><div><Typography.Title level={3} style={{marginBottom:4}}>选课工作台</Typography.Title><Typography.Text type="secondary">仅显示当前开放周期 · 跨专业选课 · 保存后提交</Typography.Text></div><Space wrap><Link to="/profile"><Button>维护个人资料</Button></Link>{(can(user,'admin')||can(user,'review')||can(user,'publish'))&&<Link to="/planning/review"><Button>管理与审核工作台</Button></Link>}<ProfessionalExport/></Space></Space>
     <div className="selection-filters"><HelpTip title="课程取自课程管理中的活动课程库，并由管理员配置后开放为教学任务。阶段、时段与地点由学院统一安排。勾选会自动保存，也可点击“保存”再次确认；切换筛选不清空草稿；各周期独立保存提交，每周期最多选择5门课程。"/><Space wrap><label>学年 <Select disabled={busy} aria-label="选课学年" value={year||undefined} style={{minWidth:170}} options={years.map(y=>({value:y,label:`${y}学年`}))} onChange={value=>{setYear(value);setMajor('all');setDetail(undefined);}}/></label><label>学期 <Select disabled={busy} aria-label="选课学期" value={term} style={{minWidth:150}} options={[{value:'all',label:'全部学期'},{value:'1',label:'第一学期'},{value:'2',label:'第二学期'}]} onChange={setTerm}/></label><label>专业 <Select disabled={busy} aria-label="选课专业" value={major} style={{minWidth:190}} options={[{value:'all',label:'全部专业（可跨专业选课）'},...majors.map(m=>({value:m,label:m}))]} onChange={setMajor}/></label><label>年级 <Select aria-label="选课年级" value={cohort} onChange={setCohort} style={{minWidth:140}} options={[{value:'all',label:'全部年级'},...cohorts.map(value=>({value,label:gradeLabel(value)}))]}/></label><Input aria-label="搜索课程教师班级地点" prefix={<SearchOutlined/>} placeholder="搜索课程、教师、班级或地点" value={search} onChange={e=>setSearch(e.target.value)} style={{width:260}} allowClear/><Button icon={<ReloadOutlined/>} disabled={busy} onClick={()=>{void bootstrap();setRefresh(value=>value+1);}}>刷新</Button></Space></div>
     <div className="selection-summary"><div><strong>{currentPlans.length}</strong><span>开放周期</span></div><div><strong>{currentPlans.reduce((sum,p)=>sum+visibleTasks(p).length,0)}</strong><span>课程任务</span></div><div><strong>{new Set(currentPlans.flatMap(p=>visibleTasks(p).map((t:any)=>t.group))).size}</strong><span>开课班级</span></div><div><strong>{currentPlans.reduce((sum,p)=>sum+p.draft.task_ids.length,0)}</strong><span>已选任务</span></div></div>
+    {recommend?.recommendations?.length>0&&<Card size="small" title="智能推荐" extra={<Tag color="purple">基于您的画像</Tag>} style={{marginBottom:12}}>
+      <Typography.Paragraph type="secondary" style={{marginBottom:8}}>{recommend.summary}</Typography.Paragraph>
+      <Space direction="vertical" size="small" style={{width:'100%'}}>
+        {recommend.recommendations.map((r:any)=><div key={r.task_id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,flexWrap:'wrap'}}>
+          <Space wrap><Typography.Text strong>{r.name}</Typography.Text><Typography.Text type="secondary">{r.group}{r.direction?` · ${r.direction}`:''}</Typography.Text></Space>
+          <Tag color="blue">{r.reason}</Tag>
+        </div>)}
+      </Space>
+    </Card>}
+    <Card size="small" title="智能助手" extra={<Tag color="green">AI 问答</Tag>} style={{marginBottom:12}}>
+      <Space.Compact style={{width:'100%'}}>
+        <Input aria-label="智能助手输入" placeholder="问我选课、推荐或我的画像，如「我该选哪几门课？」" value={qaQ} onChange={e=>setQaQ(e.target.value)} onPressEnter={()=>void askMyQa()}/>
+        <Button type="primary" loading={qaBusy} onClick={()=>void askMyQa()}>提问</Button>
+      </Space.Compact>
+      {qaA&&<Alert style={{marginTop:8}} type="info" showIcon message={qaA}/>}
+    </Card>
     {error&&<Alert showIcon type="error" title={error}/>}
     {gridLoading?<Spin/>:!currentPlans.length?<Empty description="暂无符合筛选条件的开放选课周期，请等待管理员开放"/>:<Space orientation="vertical" style={{width:'100%'}} size="large">{pool}</Space>}
     {!selectionActive&&<ConfirmedWorkloadPanel plans={allPlans} refreshKey={refresh}/>}

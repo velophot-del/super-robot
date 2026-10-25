@@ -143,9 +143,12 @@ def _soft_score(tasks):
 
 def _published_teacher_tasks(db,plan):
     from app.services.stage_planning import task_dict
+    from app.services.plan_versions import superseded_plan_ids
     chosen=defaultdict(list);supersedes=(plan.settings or {}).get('supersedes_plan_id')
+    superseded = superseded_plan_ids(db)
     end_date=plan.start_date+timedelta(weeks=plan.weeks)
     for other_plan in db.query(AcademicPlan).filter(AcademicPlan.state=='published',AcademicPlan.id!=plan.id,AcademicPlan.id!=supersedes):
+        if other_plan.id in superseded:continue
         if not (other_plan.start_date<end_date and other_plan.start_date+timedelta(weeks=other_plan.weeks)>plan.start_date):continue
         for assignment in db.query(TeachingAssignment):
             other_task=db.get(TeachingTask,assignment.task_id)

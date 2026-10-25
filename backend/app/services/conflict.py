@@ -22,6 +22,8 @@ class ConflictDetector:
         self.hard_conflicts: List[Dict[str, Any]] = []
         self.soft_conflicts: List[Dict[str, Any]] = []
         self.conflict_stats: Dict[str, Any] = {}
+        # 资源占用表：(kind, resource_id, week, day, period) -> 占用该节次的条目 ID 集合
+        self._occupancy: Dict[Tuple[str, int, int, int, int], Set[int]] = defaultdict(set)
 
     def detect_all(self) -> Tuple[List[Dict], List[Dict], Dict]:
         """执行全部冲突检测
@@ -31,6 +33,7 @@ class ConflictDetector:
         """
         self.hard_conflicts = []
         self.soft_conflicts = []
+        self._build_occupancy()
 
         self._detect_teacher_conflicts()
         self._detect_classroom_conflicts()
@@ -42,6 +45,73 @@ class ConflictDetector:
         self._compute_stats()
 
         return self.hard_conflicts, self.soft_conflicts, self.conflict_stats
+
+    def _build_occupancy(self):
+        """预建资源占用表，供冲突检测与自由时段搜索复用。"""
+        self._occupancy = defaultdict(set)
+        self._entry_by_id: Dict[int, Dict[str, Any]] = {}
+        for entry in self.entries:
+            eid = entry.get("id", 0)
+            self._entry_by_id[eid] = entry
+            week = entry.get("week_number", 1)
+            day = entry.get("day_of_week")
+            period_start = entry.get("period_start", 1)
+            period_end = entry.get("period_end", period_start)
+            for period in range(period_start, period_end + 1):
+                for kind, rid in (("teacher", entry.get("teacher_id")),
+                                  ("classroom", entry.get("classroom_id")),
+                                  ("class", entry.get("class_id"))):
+                    self._occupancy[(kind, rid, week, day, period)].add(eid)
+
+    def _slot_occupied_by_other(self, entry, day, period):
+        """该节次是否被本条以外的条目占用（教师/教室/班级任一维度冲突即占用）。"""
+        eid = entry.get("id", 0)
+        week = entry.get("week_number", 1)
+        for kind, rid in (("teacher", entry.get("teacher_id")),
+                          ("classroom", entry.get("classroom_id")),
+                          ("class", entry.get("class_id"))):
+            if self._occupancy.get((kind, rid, week, day, period), set()) - {eid}:
+                return True
+        return False
+
+    @staticmethod
+    def _period_label(start, count):
+        end = start + count - 1
+        return f"第{start}节" if count == 1 else f"第{start}-{end}节"
+
+    def _find_free_slots(self, entry, max_options=3):
+        """为条目在当前周内寻找可整段搬移的空闲时段。
+
+        只搜索周一至周五、第1-8节内能容纳条目时长的连续时段，
+        要求教师、教室、班级三个维度都无其他条目占用。
+        """
+        need = (entry.get("period_end", entry.get("period_start", 1))
+                - entry.get("period_start", 1) + 1)
+        options = []
+        for day in range(1, 6):
+            for start in range(1, 9 - need + 1):
+                if all(not self._slot_occupied_by_other(entry, day, p)
+                       for p in range(start, start + need)):
+                    options.append((day, start, need))
+                    if len(options) >= max_options:
+                        return options
+        return options
+
+    def _relocation_options(self, entry, max_options=3):
+        """把自由时段格式化为可读的调整建议。"""
+        slots = self._find_free_slots(entry, max_options)
+        current = (entry.get("day_of_week"), entry.get("period_start", 1),
+                   entry.get("period_end", entry.get("period_start", 1)))
+        course = entry.get("course_name", "该课程")
+        lines = []
+        for day, start, count in slots:
+            if (day, start, start + count - 1) == current:
+                continue
+            lines.append(f"将《{course}》调整到 周{day} {self._period_label(start, count)}"
+                         f"（教师/教室/班级均空闲）")
+        if not lines:
+            lines.append(f"本周内未找到可整体搬移的空闲时段，建议跨周调整或更换教师/教室")
+        return lines
 
     def _detect_teacher_conflicts(self):
         """检测教师时间冲突 - 同一教师同一时间被安排多门课程"""
@@ -60,13 +130,16 @@ class ConflictDetector:
 
         for (teacher_id, week, day, period), entry_ids in slot_map.items():
             if len(entry_ids) > 1:
+                entry = self._entry_by_id.get(entry_ids[0])
+                fix = self._relocation_options(entry) if entry else []
                 self.hard_conflicts.append({
                     "conflict_type": "hard",
                     "category": "teacher",
                     "description": f"教师(ID:{teacher_id})在第{week}周 周{day} 第{period}节被安排了{len(entry_ids)}门课程",
                     "severity": 10.0,
                     "entries_involved": entry_ids,
-                    "resolution_suggestion": f"将冲突的课程之一调整到其他时间段，或指定其他教师授课"
+                    "resolution_suggestion": fix[0] if fix else "将冲突的课程之一调整到其他时间段，或指定其他教师授课",
+                    "fix_options": fix,
                 })
 
     def _detect_classroom_conflicts(self):
@@ -86,13 +159,16 @@ class ConflictDetector:
 
         for (classroom_id, week, day, period), entry_ids in slot_map.items():
             if len(entry_ids) > 1:
+                entry = self._entry_by_id.get(entry_ids[0])
+                fix = self._relocation_options(entry) if entry else []
                 self.hard_conflicts.append({
                     "conflict_type": "hard",
                     "category": "classroom",
                     "description": f"教室(ID:{classroom_id})在第{week}周 周{day} 第{period}节被重复占用",
                     "severity": 10.0,
                     "entries_involved": entry_ids,
-                    "resolution_suggestion": f"将冲突课程调整到空闲教室或不同时间段"
+                    "resolution_suggestion": fix[0] if fix else "将冲突课程调整到空闲教室或不同时间段",
+                    "fix_options": fix,
                 })
 
     def _detect_class_conflicts(self):
@@ -112,13 +188,16 @@ class ConflictDetector:
 
         for (class_id, week, day, period), entry_ids in slot_map.items():
             if len(entry_ids) > 1:
+                entry = self._entry_by_id.get(entry_ids[0])
+                fix = self._relocation_options(entry) if entry else []
                 self.hard_conflicts.append({
                     "conflict_type": "hard",
                     "category": "class",
                     "description": f"班级(ID:{class_id})在第{week}周 周{day} 第{period}节被安排了{len(entry_ids)}门课程",
                     "severity": 10.0,
                     "entries_involved": entry_ids,
-                    "resolution_suggestion": f"将冲突课程调整到该班级的其他空闲时间"
+                    "resolution_suggestion": fix[0] if fix else "将冲突课程调整到该班级的其他空闲时间",
+                    "fix_options": fix,
                 })
 
     def _detect_capacity_conflicts(self):

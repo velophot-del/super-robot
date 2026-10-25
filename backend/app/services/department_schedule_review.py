@@ -186,7 +186,7 @@ def latest_manual_event(db, task):
     return next((row for row in rows if row.payload.get('task_id') == task.id), None)
 
 
-def validate_proposal(db, user, plan, task, proposal):
+def validate_proposal(db, user, plan, task, proposal, require_approval=False):
     from app.api.planning import assigned_tasks, capacity, latest_submissions, profile_for
 
     current = task_dict(db, task)
@@ -195,12 +195,18 @@ def validate_proposal(db, user, plan, task, proposal):
         raise HTTPException(422, f"教师建议人数须为{current['teacher_count']}人")
     scope = reviewer_scope(db, user)
     submissions = latest_submissions(db, plan.id)
+    claimed = any(task.id in submission.task_ids for submission in submissions.values())
     own_submission = submissions.get(getattr(user, 'teacher_id', None))
     if own_submission and task.id in own_submission.task_ids:
         raise HTTPException(403, '本人申报的课程须由其他审核人处理')
     if len(set(teacher_ids)) != len(teacher_ids):
         raise HTTPException(422, '教师不能重复选择')
     for teacher_id in teacher_ids:
+        if require_approval and claimed:
+            submission = submissions.get(teacher_id)
+            if not submission or task.id not in submission.task_ids:
+                raise HTTPException(409, '教师未申报本课程')
+            department_review.require_approved(db, plan, submission, task.id)
         teacher = db.get(Teacher, teacher_id)
         if not teacher:
             raise HTTPException(404, '教师不存在')
@@ -223,6 +229,11 @@ def manual_teacher_ids(db, task):
     rows = db.query(PlanningEvent).filter_by(plan_id=task.plan_id,
         action='manual_teacher_assignment').order_by(PlanningEvent.id.desc())
     record = next((row.payload for row in rows if row.payload.get('task_id') == task.id), {})
+    if record.get('source') == 'department_confirmation':
+        from app.api.planning import latest_submissions
+        if any(task.id in submission.task_ids
+               for submission in latest_submissions(db, task.plan_id).values()):
+            return set()
     if (record.get('match_id') != assignment.match_id or record.get('teacher_ids') != assignment.teacher_ids
             or record.get('task_payload') != department_review.task_fingerprint(task.payload)):
         return set()

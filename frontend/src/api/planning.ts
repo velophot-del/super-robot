@@ -37,6 +37,8 @@ export const planningApi = {
   state: (id: number, reviewOnly=false) => api.get(`/planning/plans/${id}`,{params:reviewOnly?{review_only:true}:undefined}),
   profiles: () => api.get('/planning/profiles'),
   saveProfile: (id: number, data: unknown) => api.put(`/planning/profiles/${id}`, data),
+  autoBuildProfile: (id: number) => api.post(`/planning/profiles/${id}/auto-build`),
+  matchExplanations: (id: number) => api.post(`/planning/plans/${id}/match-explanations`),
   addTask: (id: number, data: unknown) => api.post(`/planning/plans/${id}/tasks`, data),
   editTask: (id: number, taskId: number, data: unknown) => api.put(`/planning/plans/${id}/tasks/${taskId}`, data),
   setTaskLimits: (id:number,task:number,data:{revision:number;teacher_count:number;max_students:number;room_id?:number|null}) => api.put(`/planning/plans/${id}/tasks/${task}/limits`,data),

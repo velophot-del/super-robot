@@ -22,8 +22,8 @@ def _rule_for_plan(db, plan, cohort):
         from app.models.planning import PublishedPlan
         snapshot = db.query(PublishedPlan).filter_by(plan_id=plan.id).order_by(PublishedPlan.id.desc()).first()
         frozen = ((snapshot.payload.get('plan') or {}).get('cohort_calendar_rules') or {}).get(key) if snapshot else None
-        if frozen:
-            return frozen
+        # Absence also freezes the default calendar used at publication.
+        return frozen
     return cohort_calendar_rule(db, key)
 
 

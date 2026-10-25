@@ -7,6 +7,11 @@ html,body,#root { min-height:100%; font-family:Inter,"Noto Sans SC",-apple-syste
 .ant-card { border-color:#e5e7eb; box-shadow:0 1px 3px #18202b06; }
 .ant-table-thead>tr>th { background:#f8f9fa !important; font-size:14px !important; font-weight:600; }
 .ant-tag { border-radius:4px; }
+/* 主题 colorInfo 为深色（#202124），导致 info 提示框背景偏深、文字仍是深色；改为白字保证可读 */
+.ant-alert-info { background:#626f77 !important; color:#ffffff !important; }
+.ant-alert-info .ant-alert-message,
+.ant-alert-info .ant-alert-description,
+.ant-alert-info .ant-alert-icon { color:#ffffff !important; }
 .ant-modal-content { border-radius:8px; }
 ::-webkit-scrollbar { width:8px; height:8px; }
 ::-webkit-scrollbar-thumb { background:#cbd0d8; border-radius:4px; }

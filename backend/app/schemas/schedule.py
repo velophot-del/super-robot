@@ -84,3 +84,4 @@ class ConflictInfo(BaseModel):
     severity: float  # 0-10
     entries_involved: List[int] = []  # 涉及的排课条目ID
     resolution_suggestion: Optional[str] = None
+    fix_options: List[str] = []  # 具体可行的调整动作（由冲突检测器搜索空闲时段生成）

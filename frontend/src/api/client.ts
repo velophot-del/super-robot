@@ -178,3 +178,20 @@ export const authApi = {
   getMe: () => apiClient.get('/auth/me'),
   changePassword: (data: {current_password: string; new_password: string}) => apiClient.post('/auth/password', data),
 };
+
+// ===== AI 智能辅助 API =====
+export const intelligenceApi = {
+  reviewImport: (entityType: 'course' | 'teacher', records: unknown[]) =>
+    apiClient.post('/intelligence/import/review', { entity_type: entityType, records }),
+  reviewImportFile: (entityType: 'course' | 'teacher', file: File) => {
+    const form = new FormData();
+    form.append('entity_type', entityType);
+    form.append('file', file);
+    return apiClient.post('/intelligence/import/review-file', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
+  qa: (question: string) => apiClient.post('/intelligence/qa', { question }),
+  myQa: (question: string) => apiClient.post('/intelligence/my-qa', { question }),
+  recommend: (planId: number) => apiClient.get(`/intelligence/plans/${planId}/recommend`),
+};

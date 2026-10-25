@@ -79,6 +79,10 @@ def export_word(major:str=Query(default='',max_length=200),start_date:date=Query
     if plan_id is not None and not blank:
         candidates=[batch for batch in candidates if batch['plan'].get('id')==plan_id]
         if not candidates:raise HTTPException(404,'所选周期不存在')
+    elif not blank:
+        from app.services.plan_versions import superseded_plan_ids
+        superseded = superseded_plan_ids(db)
+        candidates = [batch for batch in candidates if batch['plan']['id'] not in superseded]
     for batch in candidates:
         plan=batch['plan']
         if plan['start_date']!=start_date.isoformat() or plan['weeks']!=weeks:continue

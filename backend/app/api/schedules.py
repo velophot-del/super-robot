@@ -424,6 +424,7 @@ def detect_conflicts(version: str = Query(None), db: Session = Depends(get_db)):
             severity=c["severity"],
             entries_involved=c.get("entries_involved", []),
             resolution_suggestion=c.get("resolution_suggestion"),
+            fix_options=c.get("fix_options", []),
         ))
 
     return conflicts

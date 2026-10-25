@@ -29,8 +29,11 @@ from app.services.personal_profile import require_personal_profile,missing_profi
 from app.services.course_catalog import course_catalog_scope, course_schedule_info
 from app.services.ai_explanation import generate_ai_advice
 from app.services.ai_config import LLMError, call_llm, resolve_config
+from app.services import match_explanation
+from app.services import profile_autobuild
 from app.services import department_review
 from app.services import department_schedule_review
+from app.services.plan_versions import superseded_plan_ids
 
 router = APIRouter(prefix='/api/planning', tags=['教师选课与阶段计划'])
 
@@ -108,11 +111,12 @@ def profile_for(db, teacher_id):
 
 def assigned_tasks(db, plan, teacher_id, exclude=None):
     chosen=[]
+    superseded = superseded_plan_ids(db)
     for assignment in db.query(TeachingAssignment):
         if not assignment.locked or assignment.task_id == exclude or teacher_id not in assignment.teacher_ids: continue
         task = db.get(TeachingTask, assignment.task_id); other = db.get(AcademicPlan, task.plan_id)
         supersedes = (plan.settings or {}).get('supersedes_plan_id')
-        if other.id == plan.id or (other.id != supersedes and other.state in {'open', 'matched', 'published'}):
+        if other.id not in superseded and (other.id == plan.id or (other.id != supersedes and other.state in {'open', 'matched', 'published'})):
             chosen.append((task_dict(db,task),other))
     return chosen
 
@@ -303,7 +307,7 @@ def save_department_schedule_draft(plan_id: int, task_id: int, data: DepartmentS
         if current.get('status') == 'approved':
             raise HTTPException(409, '课程已由管理员确认，不能继续编辑')
         proposal = {'teacher_ids': data.teacher_ids, 'reason': data.reason.strip()}
-        department_schedule_review.validate_proposal(db, user, plan, task, proposal)
+        department_schedule_review.validate_proposal(db, user, plan, task, proposal, require_approval=True)
         event_id_before = current.get('proposal_id')
         payload = {'task_id': task.id, 'base_revision': plan.revision,
                    'base_fingerprint': data.base_fingerprint, 'proposal': proposal,
@@ -372,7 +376,7 @@ def decide_department_schedule(plan_id: int, task_id: int, data: DepartmentSched
         applied_fingerprint = None
         if data.approved:
             proposal = proposal_event.payload['proposal']
-            department_schedule_review.validate_proposal(db, user, plan, task, proposal)
+            department_schedule_review.validate_proposal(db, user, plan, task, proposal, require_approval=True)
             teacher_ids = proposal['teacher_ids']
             apply_manual_assignment(db, user, plan, task, teacher_ids, source='department_confirmation')
             db.flush()
@@ -546,6 +550,25 @@ def review_department_with_ai(plan_id:int,use_ai:bool=Query(True),unit_id:int|No
     return report
 
 
+def selection_task(task):
+    """Public selection data never includes rosters or arbitrary source payloads."""
+    fields = {'id', 'plan_id', 'name', 'code', 'group', 'class_name', 'class_id',
+        'major', 'department', 'cohort', 'program_semester', 'credits', 'required_hours',
+        'start_week', 'end_week', 'tail_weeks', 'slots', 'direction', 'tags',
+        'teacher_count', 'teacher_ids', 'teacher_names', 'locked', 'mode',
+        'student_count', 'actual_student_count', 'max_students', 'room_id',
+        'room_type', 'room_name', 'room_address'}
+    result = {key: value for key, value in task.items() if key in fields}
+    source = task.get('source') or {}
+    result['source'] = {key: source[key] for key in
+        ('course_id', 'document_id', 'revision', 'major', 'cohort') if key in source}
+    metadata = source.get('course_metadata') or {}
+    result['source']['course_metadata'] = {key: metadata[key] for key in
+        ('name', 'code', 'credits', 'required_hours', 'category', 'course_type',
+         'semester', 'teaching_weeks', 'weekly_hours', 'tail_hours', 'weekdays') if key in metadata}
+    return result
+
+
 @router.get('/plans/{plan_id}')
 def get_state(plan_id: int, user=Depends(require_user), db: Session=Depends(get_db), review_only: bool = Query(False)):
     plan=get_plan(db,plan_id)
@@ -626,6 +649,9 @@ def get_state(plan_id: int, user=Depends(require_user), db: Session=Depends(get_
         task['plan_id']=plan.id
         if row:
             task['class_id']=row.id;task['cohort']=row.grade;task['major']=row.department or task.get('major')
+    tasks = [task if can(user, 'admin') or can(user, 'publish') or can(user, 'review', task) or review_only or
+             (teacher_id is not None and teacher_id in task.get('teacher_ids', []))
+             else selection_task(task) for task in tasks]
     return {**info,'can_resubmit':department_review.may_resubmit(db,plan,teacher_id),'tasks':tasks,'class_scopes':class_scopes,'snapshot_id':snapshot.id if snapshot else None,'workload_estimates':estimates,
         'match_weights':weights,'match_weight_items':weight_items(weights),'match_weight_total':weights_total(weights),
         'draft':({'revision':draft.revision,'task_ids':draft.task_ids,'plan_revision':draft.plan_revision} if draft else {'revision':0,'task_ids':[],'plan_revision':plan.revision}) if not review_only else {'revision':0,'task_ids':[],'plan_revision':plan.revision},
@@ -805,6 +831,17 @@ def update_profile(teacher_id: int, data: ProfileInput, user=Depends(require_use
         return {'success':True}
 
 
+@router.post('/profiles/{teacher_id}/auto-build')
+def auto_build_profile(teacher_id: int, user=Depends(require_user), db: Session=Depends(get_db)):
+    """从历史授课记录自动生成教师画像建议（方向/领域/擅长课程），供管理员确认后写入。"""
+    check(user, 'admin')
+    try:
+        result = profile_autobuild.build_profile_proposal(db, teacher_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc))
+    return result
+
+
 @router.post('/plans/{plan_id}/tasks')
 def add_task(plan_id: int, data: TaskInput, user=Depends(require_user), db: Session=Depends(get_db)):
     check(user,'admin')
@@ -952,8 +989,10 @@ def validate_global_room(db,plan,task,room_id):
     from app.services.stage_planning import occurrences
     occupied={(d,p) for _,d,p in occurrences(task,plan,db)}
     if not occupied:return
+    superseded = superseded_plan_ids(db)
     for other in db.query(TeachingTask).filter(TeachingTask.id!=task['id']):
         other_plan=db.get(AcademicPlan,other.plan_id)
+        if other_plan.id in superseded:continue
         if other_plan.state not in {'open','matched','published'} or other_plan.id==(plan.settings or {}).get('supersedes_plan_id'):continue
         data=task_dict(db,other)
         if data.get('room_id')!=room_id or not data.get('start_week'):continue
@@ -966,8 +1005,10 @@ def validate_global_student_scope(db,plan,task):
     from app.services.cohort_calendar import cohort_start_date
     weeks={};days={d for _,d,_ in occurrences(task,plan,db)}
     candidates=[(task,plan)]
+    superseded = superseded_plan_ids(db)
     for other in db.query(TeachingTask).filter(TeachingTask.id!=task['id']):
         other_plan=db.get(AcademicPlan,other.plan_id)
+        if other_plan.id in superseded:continue
         if other_plan.id==(plan.settings or {}).get('supersedes_plan_id'):continue
         if other_plan.id!=plan.id and other_plan.state not in {'matched','published'}:continue
         data=task_dict(db,other)
@@ -1348,6 +1389,24 @@ def match(plan_id:int,user=Depends(require_user),db:Session=Depends(get_db),use_
                 'ai_reason': ai_payload.get('reason', ''), **payload}
 
 
+@router.post('/plans/{plan_id}/match-explanations')
+def match_explanations(plan_id: int, user=Depends(require_user), db: Session = Depends(get_db)):
+    """为最近一次匹配的候选教师生成自然语言推荐理由。
+
+    未配置 AI 服务时返回规则生成的说明，保证审核界面始终有可读依据。
+    """
+    if not can(user, 'admin') and not can(user, 'review'):
+        raise HTTPException(403, '仅管理员或审核人可查看匹配理由')
+    plan = get_plan(db, plan_id)
+    run = db.query(MatchRun).filter_by(plan_id=plan.id).order_by(MatchRun.id.desc()).first()
+    if not run:
+        return {'source': 'rules', 'reason': '尚未运行匹配', 'items': []}
+    candidates = run.payload.get('candidates') or []
+    teacher_names = {t.id: t.name for t in db.query(Teacher)}
+    task_names = {t['id']: t['name'] for t in tasks_for(db, plan)}
+    return match_explanation.explain_match_candidates(db, candidates, teacher_names, task_names)
+
+
 def _validate_assignment(db,plan,task,teacher_ids,run,user):
     """自动匹配审核与人工调剂共用同一套资格、回避和容量校验。"""
     if not task or task.plan_id!=plan.id:raise HTTPException(404,'任务不存在')
@@ -1417,7 +1476,8 @@ def apply_manual_assignment(db,user,plan,task,teacher_ids,source='administrator'
     if plan.state not in {'open','matched'}:raise HTTPException(409,'仅开放或匹配阶段可指定课程教师')
     if not task or task.plan_id!=plan.id:raise HTTPException(404,'任务不存在')
     if not task.payload.get('start_week'):raise HTTPException(409,'请先安排课程教学周段')
-    department_schedule_review.validate_proposal(db,user,plan,task,{'teacher_ids':teacher_ids})
+    department_schedule_review.validate_proposal(db,user,plan,task,{'teacher_ids':teacher_ids},
+        require_approval=source=='department_confirmation')
     row=db.query(MatchRun).filter_by(plan_id=plan.id).order_by(MatchRun.id.desc()).first()
     if not row or row.payload.get('plan_revision')!=plan.revision:
         row=MatchRun(plan_id=plan.id,payload={'plan_revision':plan.revision,'source':'manual',
@@ -1462,6 +1522,9 @@ def publish(plan_id:int,user=Depends(require_user),db:Session=Depends(get_db)):
     with write(db):
         plan=get_plan(db,plan_id);tasks=tasks_for(db,plan)
         if plan.state!='matched':raise HTTPException(409,'计划尚未完成匹配审核')
+        parent_id = (plan.settings or {}).get('supersedes_plan_id')
+        if parent_id is not None and parent_id in superseded_plan_ids(db):
+            raise HTTPException(409, '原课表已有生效修订，请基于当前课表调整，不能发布过期修订分支')
         if not tasks or any(not t.get('start_week') or not t.get('end_week') for t in tasks):
             raise HTTPException(409,'尚有课程未安排教学周段')
         # 周内节次和地点允许在匹配前后暂空，但正式发布前必须补齐并通过冲突校验。
@@ -1539,6 +1602,8 @@ def events(plan_id:int,user=Depends(require_user),db:Session=Depends(get_db)):
 
 def _teacher_snapshot_task(db,plan_id,snapshot_id,task_id,teacher_id):
     plan=get_plan(db,plan_id)
+    if plan_id in superseded_plan_ids(db):
+        raise HTTPException(409, '该课表已被修订版替代，请刷新后查看当前课表')
     snapshot=db.get(PublishedPlan,snapshot_id)
     latest=db.query(PublishedPlan.id).filter_by(plan_id=plan_id).order_by(PublishedPlan.id.desc()).first()
     if plan.state!='published' or not snapshot or snapshot.plan_id!=plan_id or not latest or latest[0]!=snapshot_id:
@@ -1595,6 +1660,13 @@ def decide_schedule_change(plan_id:int,request_id:int,data:ScheduleChangeDecisio
         if not snapshot:raise HTTPException(409,'原课表快照不存在')
         revision_plan=None
         if data.approve:
+            if original.id in superseded_plan_ids(db):
+                raise HTTPException(409, '原课表已被修订版替代，请基于当前课表申请调整')
+            pending_revision = next((plan for plan in db.query(AcademicPlan)
+                if plan.state in {'draft', 'open', 'matched'} and
+                (plan.settings or {}).get('supersedes_plan_id') == original.id), None)
+            if pending_revision:
+                raise HTTPException(409, f'已有进行中的修订周期 {pending_revision.id}，请合并调整，不能重复创建')
             payload=snapshot.payload['plan'];settings={**(original.settings or {}),'supersedes_plan_id':original.id,'revision_of_snapshot_id':snapshot.id}
             revision_plan=AcademicPlan(name=f"{original.name} · 调整修订",start_date=original.start_date,weeks=original.weeks,
                 deadline=datetime.utcnow()+timedelta(days=14),state='draft',rule_confirmed=True,settings=settings)

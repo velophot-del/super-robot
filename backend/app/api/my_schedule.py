@@ -8,6 +8,7 @@ from app.models.schedule import ScheduleEntry
 from app.models.user import User
 from app.schemas.schedule import ScheduleEntryResponse
 from app.services.auth import require_user
+from app.services.plan_versions import superseded_plan_ids
 
 router = APIRouter(prefix="/api/my", tags=["教师工作台"])
 
@@ -51,7 +52,9 @@ def planning_timetable(user: User = Depends(require_user), db: Session = Depends
     current = {'academic_year': f'{first_year}—{first_year + 1}',
                'academic_term': 2 if 2 <= today.month <= 7 else 1}
     latest = {}
+    superseded = superseded_plan_ids(db)
     for row in db.query(PublishedPlan).order_by(PublishedPlan.id):
+        if row.plan_id in superseded:continue
         latest[row.plan_id] = row
     batches = []
     for row in latest.values():

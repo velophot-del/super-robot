@@ -12,6 +12,7 @@ from app.api import debug
 from app.api import my_schedule
 from app.api import planning
 from app.api import academic_catalog, planning_exports, stage_designer, ai_settings, downloads
+from app.api import intelligence
 from app.services.auth import require_management_access
 
 
@@ -61,6 +62,7 @@ app.include_router(stage_designer.router)
 app.include_router(academic_catalog.router)
 app.include_router(ai_settings.router)
 app.include_router(downloads.router)
+app.include_router(intelligence.router)
 app.include_router(auth.router)
 app.include_router(debug.router)
 
