@@ -10,6 +10,7 @@ class PlanInput(BaseModel):
     weeks: int = Field(20, ge=18, le=20)
     deadline: datetime
     rule_confirmed: bool = False
+    department_review: bool = False
     # 全学院周期：term 为全局学期（1/2），不绑定专业、年级或培养学期。
     global_cycle: bool = False
     term: int = Field(2, ge=1, le=2)
@@ -82,6 +83,7 @@ class TaskLimitsInput(BaseModel):
     teacher_count: int = Field(ge=1, le=5)
     max_students: int = Field(ge=1, le=10000)
     room_id: int | None = Field(default=None, ge=1)
+    slots: list[SlotInput] | None = Field(default=None, max_length=14)
 
 
 class RoomInput(BaseModel):
@@ -129,10 +131,12 @@ class AssignmentInput(BaseModel):
 
 
 class ManualAssignmentInput(BaseModel):
-    """管理员在实时全学院课表中人工调剂已审核任务。"""
+    """管理员直接指定教师，独立于教师申报和自动匹配。"""
     teacher_ids: list[int] = Field(min_length=1, max_length=5)
-    match_id: int
-    reason: str = Field(min_length=1, max_length=1000)
+    match_id: int | None = None
+    base_revision: int | None = Field(default=None, ge=1)
+    base_fingerprint: str | None = Field(default=None, min_length=64, max_length=64)
+    reason: str = Field(default="", max_length=1000)
 
 
 class ExamWeeksInput(BaseModel):

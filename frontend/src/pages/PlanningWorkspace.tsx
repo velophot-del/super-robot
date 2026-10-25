@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, Button, Card, Checkbox, Col, DatePicker, Descriptions, Empty, Form, Input, InputNumber, message,
   Modal, Row, Select, Space, Spin, Table, Tabs, Tag, Tooltip, Typography } from 'antd';
-import { InfoCircleOutlined, RobotOutlined } from '@ant-design/icons';
+import { DeleteOutlined, InfoCircleOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useAuth } from '../contexts/AuthContext';
 import { can } from '../lib/accessPolicy';
@@ -15,6 +15,9 @@ import { academicCalendar, suggestedMonday } from '../lib/academicCalendar';
 import AdminStagePlanner from '../components/AdminStagePlanner';
 import ReviewTimetable from '../components/ReviewTimetable';
 import MatchWeightsPanel from '../components/MatchWeightsPanel';
+import DepartmentAiReviewPanel from '../components/DepartmentAiReviewPanel';
+import {departmentDirectAssign, departmentScheduleDraft} from '../lib/departmentSchedule';
+import DepartmentScheduleInbox from '../components/DepartmentScheduleInbox';
 
 const { Title, Text, Paragraph } = Typography;
 const stateNames: Record<string,string> = { draft:'计划草稿', open:'开放填报', matched:'匹配待审核', published:'已发布' };
@@ -47,13 +50,20 @@ export function ManagementPlanningWorkspace({section='plan'}:{section?:'plan'|'r
   },[calendarStart,form]);
   const [reviewReason,setReviewReason]=useState('已核对专业领域和实际负荷');
   const [changeRequests,setChangeRequests]=useState<any[]>([]);
+  const [reviewBatch,setReviewBatch]=useState<any>({plans:[],reviews:[]});
+  const [departmentBoard,setDepartmentBoard]=useState<any>({plans:[]});
 
   const load = useCallback(async () => {
     setError('');
     try {
       const list=await api.plans();setPlans(list);
       const target=id ?? list[0]?.id;
-      if(target) { if(!id)setId(target); setState(await api.state(target,section==='review'&&!admin)); } else setState(undefined);
+      if(target) { if(!id)setId(target); const results=await Promise.all([
+        api.state(target,section==='review'&&!admin),
+        section==='review'?api.reviewOverview(target):Promise.resolve({plans:[],reviews:[]}),
+        section==='review'&&!admin?api.departmentSchedule(target):Promise.resolve({plans:[]}),
+      ]);setState(results[0]);setReviewBatch(results[1]);setDepartmentBoard(results[2]);
+      } else {setState(undefined);setReviewBatch({plans:[],reviews:[]});setDepartmentBoard({plans:[]});}
       if(admin){ const [p,c]=await Promise.all([api.profiles(),loadAllClasses()]);setProfiles(p);setClasses(c); }
     }catch(e){setError(e instanceof Error?e.message:'加载失败');}finally{setLoading(false);}
   },[id,admin,section]);
@@ -90,6 +100,7 @@ export function ManagementPlanningWorkspace({section='plan'}:{section?:'plan'|'r
       room_id:p.room_id??null,
       teacher_count:p.teacher_count??1,
       max_students:p.max_students??30,
+      slots:p.slots||[],
     });
     if(type==='profile')form.setFieldsValue({...p,tags:(p.tags||[]).join('，'),team_codes:(p.team_codes||[]).join('，'),taught_codes:(p.taught_codes||[]).join('，'),external_hours:JSON.stringify(p.external_hours||{})});
   };
@@ -97,7 +108,7 @@ export function ManagementPlanningWorkspace({section='plan'}:{section?:'plan'|'r
     const v=await form.validateFields();
     setBusy(true);
     try{
-      if(modal==='plan'){const p=await api.createPlan({...v,global_cycle:true,deadline:new Date(v.deadline).toISOString()});setId(p.id);}
+      if(modal==='plan'){const p=await api.createPlan({...v,global_cycle:true,department_review:true,deadline:new Date(v.deadline).toISOString()});setId(p.id);}
       if(modal==='task'){
         if(!editingTask)throw new Error('请先从导入课程库拖入任务');
         await api.setTaskLimits(id!,editingTask.id,taskLimitsPayload(v,state.revision));
@@ -108,18 +119,28 @@ export function ManagementPlanningWorkspace({section='plan'}:{section?:'plan'|'r
   };
   const tasks:any[]=state?.tasks||[];
   const taskName=(taskId:number)=>tasks.find(t=>t.id===taskId)?.name||String(taskId);
-
+  const reviewPlans:any[]=reviewBatch.plans||[];
+  const reviewQueuePlanId=reviewPlans.find(p=>['open','matched'].includes(p.state))?.id;
+  const batchTasks=reviewPlans.flatMap(p=>(p.tasks||[]).map((t:any)=>({...t,match_id:p.match?.id,plan_state:p.state,plan_name:p.name})));
+  const batchMatch={candidates:reviewPlans.flatMap(p=>p.match?.candidates||[])};
+  const directorTasks=(departmentBoard.plans||[]).flatMap((p:any)=>(p.tasks||[]).filter((task:any)=>task.can_edit_department_schedule).map((task:any)=>({...task,applicants:(task.applicants||[]).filter((applicant:any)=>applicant.selected),match_id:p.match?.id,plan_state:p.state})));
   const matchView=<Space orientation="vertical" size="large" style={{width:'100%'}}>
-    <Alert showIcon type="info" title={admin?'系统自动匹配 + 人工审核调剂':'教研室主任审核'} description={admin?`综合推荐按当前权重合计 ${state.match_weight_total??95} 分计算；专业适配度只使用方向和领域。可运行系统规则匹配，或使用「AI 排序并自动落位」让模型按同一套权重重排候选；落位前仍会校验教师意愿、回避与容量。管理员可在下方实时全学院课表中核对并人工调剂。`:'可查看并审核授权专业方向的课程任务；匹配由学院管理员统一运行。'}/>
+    {review&&id&&<DepartmentAiReviewPanel planId={id} admin={admin} version={reviewBatch} disabled={busy||!['open','matched'].includes(state.state)}/>}
+    {admin&&review&&<Card size="small" title="主任调剂待确认">{reviewQueuePlanId?<DepartmentScheduleInbox planId={reviewQueuePlanId} disabled={busy} onRefresh={()=>void load()}/>:<Empty description="当前学年学期没有开放或匹配中的周期"/>}</Card>}
+    {admin&&!state.department_review&&state.state!=='published'&&<Button onClick={()=>Modal.confirm({title:'启用两级审核',content:'现有申报将进入教研室初审，已有任课分配保留为待复核建议，需初审通过后重新匹配。',onOk:async()=>{await api.enableDepartmentReview(id!);await load();}})}>启用教研室初审</Button>}
+    <Alert showIcon type="info" title={admin?'系统自动匹配 + 人工审核调剂':'教研室主任审核'} description={admin?`综合推荐按当前权重合计 ${state.match_weight_total??95} 分计算；专业适配度只使用方向和领域。可运行系统规则匹配，或使用「AI 排序并自动落位」让模型按同一套权重重排候选；落位前仍会校验教师意愿、回避与容量。管理员可在下方实时全学院课表中核对并人工调剂。`:'按本教研室范围审核教师选课，在课程卡片中通过或退回申请、调整任课教师；教师调整无需理由，提交管理员最终确认。'}/>
     {admin&&<Card size="small" title="匹配权重设置" style={{marginBottom:16}}>
       <MatchWeightsPanel plan={state} disabled={busy} onSaved={load}/>
     </Card>}
     {admin&&<Space wrap>
+      {!state.rule_confirmed&&state.state!=='published'&&<Button onClick={()=>void action(()=>api.confirmMatchRules(id!))}>确认当前匹配规则</Button>}
       <Button type="primary" loading={busy} disabled={!state.rule_confirmed||!['open','matched'].includes(state.state)} onClick={()=>void action(()=>api.match(id!))}>运行系统匹配（自动落位） / 保留锁定重跑</Button>
       <Button icon={<RobotOutlined/>} loading={busy} disabled={!state.rule_confirmed||!['open','matched'].includes(state.state)} onClick={()=>void aiMatch()}>AI 排序并自动落位</Button>
       <Text>已提交教师：{state.submission_count??'—'}</Text>
       {state.match?.ai?.used&&<Tag color="purple">AI 排序{state.match.ai.applied?` · 落位${state.match.ai.applied}门`:' · 未采用'}</Tag>}
     </Space>}
+    {admin&&!state.rule_confirmed&&<Alert type="warning" showIcon title="请先确认当前匹配规则，再运行自动匹配"/>}
+    {admin&&<Space wrap>{reviewPlans.filter(p=>p.id!==id).map(p=><Button key={p.id} disabled={busy||!p.rule_confirmed} onClick={()=>void action(()=>api.match(p.id))}>匹配：{p.name}{!p.rule_confirmed?'（规则待确认）':''}</Button>)}</Space>}
     {state.match?<Table rowKey={r=>`${r.task_id}-${r.teacher_id}`} dataSource={state.match.candidates} pagination={false} scroll={{x:760}}
       columns={[
         {title:'课程任务',render:(_,r:any)=>`${taskName(r.task_id)} · ${tasks.find(t=>t.id===r.task_id)?.group}`},
@@ -127,16 +148,28 @@ export function ManagementPlanningWorkspace({section='plan'}:{section?:'plan'|'r
         {title:'专业适配度',render:(_,r:any)=>r.professional_fit==null?<Tag color="orange">资料待核实</Tag>:`${r.professional_fit}%`},
         {title:'综合推荐',render:(_,r:any)=>r.raw_total==null?'待核实':`${r.raw_total}/${r.maximum??state.match?.maximum??state.match_weight_total??95} (${r.normalized_total}%)`},
         {title:'硬约束',render:(_,r:any)=>r.eligible?<Tag color="green">可审核</Tag>:<Text type="danger">{r.reasons.join('；')}</Text>},
-      ]} expandable={{expandedRowRender:(r:any)=><Space wrap>{r.components.map((c:any)=><Tag key={c.name}>{c.name}：{c.score??'未知'}/{c.maximum}{c.hits?.length?` · 命中${c.hits.join('、')}`:''}</Tag>)}</Space>}}/>:<Empty description="尚未运行匹配"/>}
-    {review&&<Card title={admin?'全学院实时课表与人工调剂':'本教研室课程审核'} extra={<Text type="secondary">教研室主任仅查看并审核授权专业方向的课程任务</Text>}>
-      <Space wrap style={{marginBottom:12,width:'100%'}}>
+      ]} expandable={{expandedRowRender:(r:any)=><Space wrap>{r.components.map((c:any)=><Tag key={c.name}>{c.name}：{c.score??'未知'}/{c.maximum}{c.hits?.length?` · 命中${c.hits.join('、')}`:''}</Tag>)}</Space>}}/>:admin?<Empty description="尚未运行匹配"/>:null}
+    {review&&<Card title={admin?"全学院实时课表与人工调剂":"本教研室实时课表与教师审核"}>
+      {admin&&<Space wrap style={{marginBottom:12,width:'100%'}}>
         <Text strong>调剂说明</Text>
         <Input aria-label="调剂说明" value={reviewReason} onChange={e=>setReviewReason(e.target.value)} placeholder="审核依据与改选原因" style={{minWidth:320,flex:1}}/>
-      </Space>
-      <ReviewTimetable plan={state} tasks={tasks} match={state.match} busy={busy}
-        canAssign={state.state==='matched'&&Boolean(state.match)} reason={reviewReason}
-        onAssign={(task,teacher_ids)=>void action(()=>api.reassign(id!,task.id,{teacher_ids,match_id:state.match.id,reason:reviewReason}))}/>
+      </Space>}
+      <ReviewTimetable plan={state} tasks={admin?(state.state==='published'?tasks:batchTasks):directorTasks} match={state.state==='published'?state.match:batchMatch} busy={busy} admin={admin}
+        canAssign={state.state!=='published'&&(admin?reviewPlans.some(p=>['open','matched'].includes(p.state)):true)} reason={reviewReason} onReviewed={()=>void load()}
+        onRoom={(task,roomId)=>void action(()=>api.setTaskRoom(task.plan_id||id!,task.id,roomId))}
+        onAssign={(task,teacher_ids)=>void action(async()=>{
+          const planId=task.plan_id||id!;
+          if(admin){
+            await api.reassign(planId,task.id,{teacher_ids,base_revision:task.base_revision,base_fingerprint:task.base_fingerprint,reason:reviewReason});
+          }else if(departmentDirectAssign(task)){
+            await api.reassign(planId,task.id,{teacher_ids,base_revision:task.base_revision,base_fingerprint:task.base_fingerprint});
+          }else{
+            const draft:any=await api.saveDepartmentScheduleDraft(planId,task.id,{...departmentScheduleDraft(task),base_revision:task.base_revision,base_fingerprint:task.base_fingerprint,teacher_ids,reason:''});
+            await api.submitDepartmentSchedule(planId,task.id,draft.proposal_id);
+          }
+        })}/>
     </Card>}
+
   </Space>;
 
   const tabs:any[]=[];
@@ -194,7 +227,7 @@ export function ManagementPlanningWorkspace({section='plan'}:{section?:'plan'|'r
           <Form.Item name="rule_confirmed" valuePropName="checked"><Checkbox>已核对以上匹配规则，允许本周期运行匹配</Checkbox></Form.Item>
         </>}
         {modal==='task'&&editingTask&&<>
-          <Alert type="info" showIcon title="课程基础信息按课程库只读展示" description="课程名称、编码、学分和学时请在课程管理中维护；周段由课表编排确定，此处设置教师人数、学生上限和上课地点。" style={{marginBottom:16}}/>
+          <Alert type="info" showIcon title="课程基础信息按课程库只读展示" description="课程名称、编码、学分和学时请在课程管理中维护；周段由课表编排确定。地点和周内节次可留空，并可在正式公布前随时调整。" style={{marginBottom:16}}/>
           <Descriptions bordered size="small" column={2} items={[
             ...([['name','课程名称'],['code','课程编码'],['credits','学分'],['required_hours','计划学时'],['category','课程性质'],['department','所属专业'],['group','教学组']] as const).map(([key,label])=>({key,label,children:taskCourseInfo(editingTask)[key]??'未注明'})),
             {key:'actual_students',label:'实际选课人数',children:Number(editingTask.actual_student_count)>0?`${editingTask.actual_student_count}人`:'待学生选课结束后统计'},
@@ -206,6 +239,20 @@ export function ManagementPlanningWorkspace({section='plan'}:{section?:'plan'|'r
           <Form.Item name="room_id" label="上课地点" extra="从教室管理选择，可暂不分配。">
             <Select allowClear showSearch optionFilterProp="label" loading={roomsLoading} placeholder="选择教室" options={rooms.map(room=>({value:room.id,disabled:!room.is_available,label:`${[room.building,room.floor!=null?`${room.floor}层`:null,room.name].filter(Boolean).join(' · ')}（${room.capacity}人）${room.is_available?'':' · 已停用'}`}))}/>
           </Form.Item>
+          <Form.List name="slots">
+            {(fields,{add,remove})=><Space direction="vertical" style={{width:'100%'}}>
+              <Text strong>周内授课时间</Text>
+              <Text type="secondary">系统按课程节次和班级占用自动初排；可留空，或在正式公布前调整。</Text>
+              {fields.map(({key,name,...rest})=><Space key={key} align="baseline" wrap>
+                <Form.Item {...rest} name={[name,'day']} rules={[{required:true,message:'请选择星期'}]}><Select aria-label={`第${name+1}个时段星期`} style={{width:110}} options={Array.from({length:7},(_,index)=>({value:index+1,label:`周${'一二三四五六日'[index]}`}))}/></Form.Item>
+                <Form.Item {...rest} name={[name,'start']} rules={[{required:true,message:'请选择起始节次'}]}><Select aria-label={`第${name+1}个时段起始节次`} style={{width:120}} options={Array.from({length:8},(_,index)=>({value:index+1,label:`第${index+1}节起`}))}/></Form.Item>
+                <Form.Item {...rest} name={[name,'count']} rules={[{required:true,message:'请选择每周节数'}]}><Select aria-label={`第${name+1}个时段连续节数`} style={{width:120}} options={Array.from({length:8},(_,index)=>({value:index+1,label:`连续${index+1}节`}))}/></Form.Item>
+                <Form.Item {...rest} name={[name,'phase']} rules={[{required:true,message:'请选择周段'}]}><Select aria-label={`第${name+1}个时段周段`} style={{width:130}} options={[{value:'normal',label:'常规周'},{value:'tail',label:'尾段周'}]}/></Form.Item>
+                <Button aria-label={`删除第${name+1}个授课时段`} type="text" danger icon={<DeleteOutlined/>} onClick={()=>remove(name)}/>
+              </Space>)}
+              <Button type="dashed" icon={<PlusOutlined/>} onClick={()=>add({day:1,start:1,count:1,phase:'normal'})}>添加授课时段</Button>
+            </Space>}
+          </Form.List>
         </>}
         {modal==='profile'&&<>
           <Alert type="info" title="教师自填专业资料优先用于匹配；此处维护团队、曾授和负荷记录，不能覆盖教师个人资料。"/><Form.Item name="direction" label="管理登记方向（未自填时使用）"><Input/></Form.Item><Form.Item name="tags" label="管理登记领域（未自填时使用）"><Input/></Form.Item>

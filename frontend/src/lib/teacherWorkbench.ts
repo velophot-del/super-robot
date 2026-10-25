@@ -1,7 +1,7 @@
 export type AcademicPeriod = {academic_year:string;academic_term:number};
 
-export function openSelectionPlans<T extends {state:string;deadline:string}>(plans:T[],now=Date.now()):T[]{
-  return plans.filter(plan=>plan.state==='open'&&Date.parse(plan.deadline)>now);
+export function openSelectionPlans<T extends {state:string;deadline:string;can_resubmit?:boolean}>(plans:T[],now=Date.now()):T[]{
+  return plans.filter(plan=>(plan.state==='open'&&Date.parse(plan.deadline)>now)||(['open','matched'].includes(plan.state)&&plan.can_resubmit));
 }
 
 export function periodKey(period:AcademicPeriod):string{

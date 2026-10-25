@@ -8,7 +8,7 @@ import test_debug_mode
 from app.models.class_info import ClassInfo
 from app.models.classroom import Classroom
 from app.models.course import Course
-from app.models.planning import AcademicPlan, PublishedPlan
+from app.models.planning import AcademicPlan, PublishedPlan, TeachingTask
 from app.models.user import User
 from app.services.auth import account_token, hash_password
 
@@ -66,9 +66,59 @@ class DownloadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.get('/api/downloads/schedule', headers=headers,
                                                 params={'plan_id': 999})).status_code, 404)
 
-    async def test_schedule_without_data_returns_404_and_non_admin_is_rejected(self):
+    async def test_schedule_download_uses_current_draft_and_blank_draft(self):
+        self.db.add_all([
+            AcademicPlan(id=2, name='Process', start_date=date(2027, 2, 1), weeks=20,
+                         deadline=datetime(2027, 1, 1), state='draft', settings={'term': 2}),
+            AcademicPlan(id=3, name='Blank', start_date=date(2027, 3, 1), weeks=20,
+                         deadline=datetime(2027, 1, 1), state='draft', settings={'term': 2}),
+        ])
+        self.db.add(TeachingTask(plan_id=2, payload={
+            'name': 'Draft Course', 'code': 'D1', 'group': '视传2601', 'cohort': '2026',
+            'major': 'Design', 'start_week': 1, 'end_week': 8, 'teacher_count': 1,
+            'required_hours': 32, 'slots': [],
+        }))
+        self.db.commit()
         headers = await self.admin_headers()
-        self.assertEqual((await self.client.get('/api/downloads/schedule', headers=headers)).status_code, 404)
+        options = (await self.client.get('/api/downloads/options', headers=headers)).json()
+        self.assertEqual({row['id']: row['state'] for row in options['plans']},
+                         {2: 'draft', 3: 'draft'})
+        process = await self.client.get('/api/downloads/schedule', headers=headers, params={'plan_id': 2})
+        self.assertEqual(process.status_code, 200, process.text)
+        sheet = load_workbook(BytesIO(process.content))['课表数据']
+        self.assertEqual(sheet.cell(2, 1).value, 'Draft Course')
+        blank = await self.client.get('/api/downloads/schedule', headers=headers, params={'plan_id': 3})
+        self.assertEqual(blank.status_code, 200, blank.text)
+        sheet = load_workbook(BytesIO(blank.content))['课表数据']
+        self.assertEqual(sheet.cell(1, 1).value, '课程名称')
+        self.assertIn('空白稿', sheet.cell(2, 1).value)
+        self.assertEqual((await self.client.get('/api/downloads/all', headers=headers,
+                                                params={'plan_id': 3})).status_code, 200)
+
+    async def test_default_schedule_uses_latest_cycle_instead_of_older_publication(self):
+        self.db.add_all([
+            AcademicPlan(id=1,name='Old published',start_date=date(2026,8,31),weeks=20,
+                         deadline=datetime(2026,8,1),state='published'),
+            AcademicPlan(id=2,name='New draft',start_date=date(2027,2,1),weeks=20,
+                         deadline=datetime(2027,1,1),state='draft'),
+        ])
+        self.db.flush()
+        self.db.add(PublishedPlan(plan_id=1,payload={'plan':{'name':'Old published'},
+            'tasks':[{'name':'Old course'}]}))
+        self.db.add(TeachingTask(plan_id=2,payload={'name':'Current course','code':'NEW',
+            'group':'New class','teacher_count':1,'required_hours':8}))
+        self.db.commit()
+        response=await self.client.get('/api/downloads/schedule',headers=await self.admin_headers())
+        self.assertEqual(response.status_code,200,response.text)
+        sheet=load_workbook(BytesIO(response.content))['课表数据']
+        self.assertEqual(sheet.cell(2,1).value,'Current course')
+
+    async def test_schedule_without_data_returns_blank_workbook_and_non_admin_is_rejected(self):
+        headers = await self.admin_headers()
+        response = await self.client.get('/api/downloads/schedule', headers=headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        sheet = load_workbook(BytesIO(response.content))['课表数据']
+        self.assertEqual(sheet.cell(1, 1).value, '课程名称')
         denied = User(username='dl_denied', email='dl_denied@test.invalid',
                       password_hash=hash_password('Test123'))
         self.db.add(denied)

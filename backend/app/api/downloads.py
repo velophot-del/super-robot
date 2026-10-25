@@ -126,28 +126,53 @@ def _slots_text(slots):
     return '；'.join(parts)
 
 
+def _schedule_rows(tasks):
+    return [[
+        task.get('name', ''), task.get('code', ''), task.get('group', ''),
+        task.get('cohort', ''), task.get('major') or task.get('department') or '',
+        '、'.join(task.get('teacher_names') or []), task.get('room_name') or '',
+        task.get('start_week'), task.get('end_week'), _slots_text(task.get('slots')),
+        task.get('required_hours'),
+        task.get('actual_student_count') or task.get('student_count') or 0,
+    ] for task in tasks]
+
+
 def _schedule_data(db, plan_id=None):
-    """返回 (headers, rows, label)。优先已发布快照，其次旧版最新排课版本。"""
+    """返回 (headers, rows, label)。优先已发布快照，其次当前周期过程稿/空白稿，最后旧版排课。"""
+    from app.models.planning import AcademicPlan
+
+    snapshot = None
+    plan = None
     if plan_id is not None:
         snapshot = (db.query(PublishedPlan).filter_by(plan_id=plan_id)
                     .order_by(PublishedPlan.id.desc()).first())
-        if not snapshot:
-            raise HTTPException(404, '所选周期暂无已发布课表')
+        plan = db.get(AcademicPlan, plan_id)
+        if not snapshot and not plan:
+            raise HTTPException(404, '所选周期不存在')
     else:
-        snapshot = db.query(PublishedPlan).order_by(PublishedPlan.id.desc()).first()
+        plan = db.query(AcademicPlan).order_by(AcademicPlan.id.desc()).first()
+        if plan and plan.state == 'published':
+            snapshot = (db.query(PublishedPlan).filter_by(plan_id=plan.id)
+                        .order_by(PublishedPlan.id.desc()).first())
+        elif not plan:
+            snapshot = db.query(PublishedPlan).order_by(PublishedPlan.id.desc()).first()
+
     if snapshot:
-        plan = snapshot.payload.get('plan') or {}
-        rows = []
-        for task in snapshot.payload.get('tasks') or []:
-            rows.append([
-                task.get('name', ''), task.get('code', ''), task.get('group', ''),
-                task.get('cohort', ''), task.get('major') or task.get('department') or '',
-                '、'.join(task.get('teacher_names') or []), task.get('room_name') or '',
-                task.get('start_week'), task.get('end_week'), _slots_text(task.get('slots')),
-                task.get('required_hours'),
-                task.get('actual_student_count') or task.get('student_count') or 0,
-            ])
-        return SCHEDULE_PLAN_HEADERS, rows, f"已发布课表 · {plan.get('name', '')}"
+        payload = snapshot.payload or {}
+        plan_payload = payload.get('plan') or {}
+        return (SCHEDULE_PLAN_HEADERS, _schedule_rows(payload.get('tasks') or []),
+                f"已发布课表 · {plan_payload.get('name', plan.name if plan else '')}")
+    if plan:
+        from app.api.planning import plan_info, tasks_for
+        plan_payload = plan_info(plan, db)
+        tasks = tasks_for(db, plan)
+        names = {row.id: row.name for row in db.query(Teacher)}
+        for task in tasks:
+            if not task.get('teacher_names'):
+                task['teacher_names'] = [names.get(tid, f'教师{tid}')
+                                         for tid in (task.get('teacher_ids') or [])]
+        label = ('空白稿' if not tasks else '过程稿') + f" · {plan_payload.get('name', '')}"
+        return SCHEDULE_PLAN_HEADERS, _schedule_rows(tasks), label
     version = resolve_schedule_version(db, None)
     if not version:
         return SCHEDULE_PLAN_HEADERS, [], '暂无排课数据'
@@ -169,20 +194,17 @@ def _schedule_data(db, plan_id=None):
 def _add_schedule_sheet(wb, db, plan_id=None):
     headers, rows, label = _schedule_data(db, plan_id)
     ws = wb.create_sheet()
-    if rows:
-        _fill_sheet(ws, '课表数据', headers, rows)
-    else:
-        _fill_sheet(ws, '课表数据', ['说明'], [[label]])
+    _fill_sheet(ws, '课表数据', headers, rows)
+    if not rows:
+        ws.append([label])
 
 
 @router.get('/options')
 def download_options(user=Depends(require_user), db: Session = Depends(get_db)):
     check(user, 'admin')
-    latest = {}
-    for snapshot in db.query(PublishedPlan).order_by(PublishedPlan.id):
-        latest[snapshot.plan_id] = snapshot
-    plans = [{'id': plan_id, 'name': (snapshot.payload.get('plan') or {}).get('name') or str(plan_id)}
-             for plan_id, snapshot in sorted(latest.items())]
+    from app.models.planning import AcademicPlan
+    plans = [{'id': plan.id, 'name': plan.name, 'state': plan.state}
+             for plan in db.query(AcademicPlan).order_by(AcademicPlan.id.desc())]
     return {'datasets': [{'key': key, 'label': label} for key, label in DATASETS.items()],
             'plans': plans, 'legacy_schedule': resolve_schedule_version(db, None)}
 
@@ -205,9 +227,10 @@ def download_dataset(dataset: str, plan_id: int | None = Query(None),
         _fill_sheet(wb.create_sheet(), '教室数据', CLASSROOM_HEADERS, _classroom_rows(db))
     elif dataset == 'schedule':
         headers, rows, label = _schedule_data(db, plan_id)
+        ws = wb.create_sheet()
+        _fill_sheet(ws, '课表数据', headers, rows)
         if not rows:
-            raise HTTPException(404, '暂无排课数据')
-        _fill_sheet(wb.create_sheet(), '课表数据', headers, rows)
+            ws.append([label])
     else:  # all
         _fill_sheet(wb.create_sheet(), '班级数据', CLASS_HEADERS, _class_rows(db))
         _fill_sheet(wb.create_sheet(), '教师数据', TEACHER_HEADERS, _teacher_rows(db))

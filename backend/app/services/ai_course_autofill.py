@@ -3,10 +3,10 @@ import json
 
 from fastapi import HTTPException
 
-from app.models.planning import AcademicPlan, TeachingTask
+from app.models.planning import AcademicPlan, TeachingTask, PeriodSlot
+from app.models.classroom import Classroom
 from app.services.academic_scope import is_global, plan_term
 from app.services.course_catalog import course_catalog_scope, course_schedule_info
-from app.services.cohort_calendar import cohort_start_dates
 from app.services.cohort_calendar import cohort_weeks, cohort_exam_weeks
 
 
@@ -49,12 +49,11 @@ def _ai_order(db, rows):
 def _course_rows(db, plan):
     settings = plan.settings or {}
     groups = settings.get('groups') or None
-    start_dates = cohort_start_dates(db, plan)
     if is_global(plan):
-        scope = course_catalog_scope(db, plan.start_date, plan_term(plan), groups,start_dates_by_cohort=start_dates)
+        scope = course_catalog_scope(db, plan.start_date, plan_term(plan), groups)
     else:
         scope = course_catalog_scope(db, plan.start_date, plan_term(plan), groups,
-            settings.get('major'), settings.get('cohort'), settings.get('semester'),start_dates_by_cohort=start_dates)
+            settings.get('major'), settings.get('cohort'), settings.get('semester'))
     rows = []
     for item in scope:
         group = item['class']
@@ -62,11 +61,13 @@ def _course_rows(db, plan):
             info = course_schedule_info(course)
             rows.append({'course_id': course.id, 'name': course.name, 'code': course.course_code,
                 'group': group.name, 'major': group.department or course.department or '',
+                'student_count': group.student_count or 0,
                 'cohort': str(group.grade or '').removesuffix('级').removesuffix('届'),
                 'semester': item['semester'], 'course_type': course.course_type,
                 'course_nature': course.course_nature, 'credits': course.credits,
                 'required_hours': info['total_hours'], 'teaching_weeks': info['teaching_weeks'],
                 'weekly_hours': info['weekly_hours'], 'weekdays': info['weekdays'],
+                'requires_lab': bool(course.requires_lab),
                 'source_total_hours': course.total_hours, 'tail_hours': course.tail_hours,
                 'notes': course.remarks or ''})
     return rows
@@ -82,12 +83,68 @@ def _new_task_payload(row, start_week):
         'end_week': start_week + duration - 1,
         'tail_weeks': 1 if row.get('tail_hours') and duration > 1 else 0,
         'teacher_count': 1, 'mode': 'single', 'student_count': 0,
-        'room_id': None, 'room_type': '', 'profile_verified': False,
+        'room_id': None, 'room_type': '实验室' if row.get('requires_lab') else '', 'profile_verified': False,
         'source': {'course_id': row['course_id'], 'major': row['major'], 'cohort': row['cohort'],
             'course_metadata': {'course_type': row['course_type'], 'course_nature': row['course_nature'],
                 'semester': row['semester'], 'teaching_weeks': duration,
                 'weekdays': row['weekdays'], 'weekly_hours': row['weekly_hours'],
                 'tail_hours': row['tail_hours']}}}
+
+
+def _place_periods(db, plan, rows, payloads):
+    """Assign course-derived weekly periods and suitable rooms without blocking the cycle."""
+    rooms = db.query(Classroom).filter(Classroom.is_available.is_(True)).order_by(Classroom.id).all()
+    room_busy = set()
+    class_busy = set()
+    for row, payload in zip(rows, payloads):
+        info_hours = int(row.get('weekly_hours') or 0)
+        if info_hours < 1 or info_hours > 12:
+            continue
+        preferred_days = row.get('weekdays') or []
+        phase = 'normal'
+        if payload.get('tail_weeks'):
+            phase = 'tail'
+        starts = range(1, 13 - info_hours + 1, 2)
+        candidates = [(day, start) for day in (preferred_days or range(1, 8))
+                      for start in starts]
+        slots = None
+        room_id = None
+        roomless_candidate = None
+        for day, start in candidates:
+            periods = {(day, period) for period in range(start, start + info_hours)}
+            weeks = range(payload['start_week'], payload['end_week'] + 1)
+            if any((row['group'], week, day) in class_busy for week in weeks):
+                continue
+            if any((row['group'], week, day, period) in class_busy for week in weeks for _, period in periods):
+                continue
+            chosen_room = next((room for room in rooms
+                if room.capacity >= int(row.get('student_count') or 0)
+                and (not row.get('requires_lab') or room.room_type == payload.get('room_type')) and all(
+                (room.id, week, day, period) not in room_busy for week in weeks for _, period in periods)), None)
+            if chosen_room is None and roomless_candidate is None:
+                roomless_candidate = (day, start, periods, weeks)
+            if rooms and chosen_room is None:
+                continue
+            slots = [{'day': day, 'start': start, 'count': info_hours, 'phase': phase}]
+            room_id = chosen_room.id if chosen_room else None
+            for week in weeks:
+                for _, period in periods:
+                    class_busy.add((row['group'], week, day, period))
+                    if room_id is not None:
+                        room_busy.add((room_id, week, day, period))
+            break
+        if slots is None and roomless_candidate:
+            day, start, periods, weeks = roomless_candidate
+            slots = [{'day': day, 'start': start, 'count': info_hours, 'phase': phase}]
+            for week in weeks:
+                for _, period in periods:
+                    class_busy.add((row['group'], week, day, period))
+        if slots:
+            payload['slots'] = slots
+        else:
+            payload['slots'] = []
+        if room_id is not None:
+            payload['room_id'] = room_id
 
 
 def autofill_draft_timetable(db, plan_id, revision, user):
@@ -123,6 +180,8 @@ def autofill_draft_timetable(db, plan_id, revision, user):
                     occupancy.setdefault((task['group'], week), set()).add(task['code'])
 
         placed = []
+        placed_rows = []
+        placed_payloads = []
         unplaced = []
         updated = []
         duplicate_keys = set()
@@ -160,17 +219,17 @@ def autofill_draft_timetable(db, plan_id, revision, user):
                 span = set(range(start, start + duration))
                 if span & exam_weeks:
                     continue
-                if any(row['code'] in occupancy.get((row['group'], week), set()) or
-                       len(occupancy.get((row['group'], week), set()) | {row['code']}) > 2
-                       for week in span):
+                # AI autofill assigns one course at a time within each teaching group.
+                if any(occupancy.get((row['group'], week)) for week in span):
                     continue
                 start_week = start
                 break
             if start_week is None:
                 unplaced.append({'course': row['name'], 'group': row['group'],
-                    'reason': '剩余周段不足（受考试周、周期长度或每周最多两门课程限制）'})
+                    'reason': '剩余周段不足（受考试周、周期长度或同教学组课程不得并行限制）'})
                 continue
             payload = _new_task_payload(row, start_week)
+            payload['slots'] = []
             if existing_task:
                 existing_task.payload = {**existing_task.payload, **payload}
                 task_id = existing_task.id
@@ -178,6 +237,8 @@ def autofill_draft_timetable(db, plan_id, revision, user):
                 task = TeachingTask(plan_id=plan.id, payload=payload)
                 db.add(task); db.flush()
                 task_id = task.id
+            placed_rows.append(row)
+            placed_payloads.append(payload)
             for week in range(start_week, start_week + duration):
                 occupancy.setdefault((row['group'], week), set()).add(row['code'])
             placed.append({'task_id': task_id, 'course': row['name'], 'code': row['code'],
@@ -186,7 +247,20 @@ def autofill_draft_timetable(db, plan_id, revision, user):
                 'end_week': start_week + duration - 1})
             updated.append(task_id)
 
+        for task_id, payload in zip(updated, placed_payloads):
+            task = db.get(TeachingTask, task_id)
+            task.payload = {**task.payload, **payload}
+            if payload.get('room_id') is not None:
+                task.payload['room_id'] = payload['room_id']
+
         if updated:
+            _place_periods(db, plan, placed_rows, placed_payloads)
+            for task_id, payload in zip(updated, placed_payloads):
+                task = db.get(TeachingTask, task_id)
+                task.payload = {**task.payload, **payload}
+                db.query(PeriodSlot).filter_by(task_id=task_id).delete()
+                db.add_all([PeriodSlot(task_id=task_id, **slot)
+                            for slot in payload.get('slots', [])])
             validate_spans(plan, tasks_for(db, plan), db)
             plan.revision += 1
         event(db, user, 'ai_course_autofill', {'source': source, 'model': model,

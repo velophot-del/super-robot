@@ -104,7 +104,7 @@ export default function AdminStagePlanner({plan,classes=[],onChange,onEdit}:{pla
     {ghost&&<div style={{position:'fixed',left:ghost.x+14,top:ghost.y+14,pointerEvents:'none',zIndex:2000,background:'#436684',color:'white',padding:'8px 12px',borderRadius:6}}>{ghost.name}</div>}
     {error&&<Alert showIcon type="error" title={error}/>}
     <Space wrap><Button icon={poolOpen?<MenuFoldOutlined/>:<MenuUnfoldOutlined/>} onClick={()=>setPoolOpen(open=>!open)}>{poolOpen?'收起课程池':'待排课程'}</Button>
-      {editable&&<Button type="primary" icon={<RobotOutlined/>} loading={busy} onClick={()=>void aiAutofill()}>AI 自动填充课程</Button>}
+      {editable&&<Button type="primary" icon={<RobotOutlined/>} loading={busy} onClick={()=>void aiAutofill()}>系统自动填充课程与节次</Button>}
       {plan.state==='matched'&&<><Button type="primary" icon={<RobotOutlined/>} loading={busy} onClick={()=>void aiDraft()}>生成节次教室初稿</Button><Button loading={busy} onClick={()=>void autoSchedule()}>预览遗传算法候选</Button></>}
       <Button icon={<RobotOutlined/>} loading={aiLoading} onClick={()=>void aiReview()}>AI 周期分析</Button>
       <Tooltip title={helpOpen?'收起编排说明':'展开编排说明'}><Button type="text" size="small" aria-label={helpOpen?'收起编排说明':'展开编排说明'} aria-expanded={helpOpen} icon={<InfoCircleOutlined/>} onClick={()=>setHelpOpen(open=>!open)}/></Tooltip>
@@ -126,7 +126,7 @@ export default function AdminStagePlanner({plan,classes=[],onChange,onEdit}:{pla
           ]}/>}
       </Space>}
     </Modal>
-    <Modal title="AI 课程周段填充结果" open={!!fillResult} onCancel={()=>setFillResult(undefined)} footer={<Button type="primary" onClick={()=>setFillResult(undefined)}>返回课表微调</Button>} width={760}>
+    <Modal title="课程自动填充结果" open={!!fillResult} onCancel={()=>setFillResult(undefined)} footer={<Button type="primary" onClick={()=>setFillResult(undefined)}>返回课表微调</Button>} width={760}>
       {fillResult&&<Space direction="vertical" style={{width:'100%'}}>
         <Alert showIcon type={fillResult.source==='llm'?'success':'info'} title={`${fillResult.source==='llm'?`AI 课程顺序 · ${fillResult.model||'模型'}`:'按课程库规则排序'} · 已填入${fillResult.filled}/${fillResult.total_candidates}门课程`} description="课程按适用班级、专业方向和培养学期匹配，自动避开考试周及每周两门上限。已分配教师、节次和教室的课程不会由此操作生成；请在甘特图继续人工微调。"/>
         {fillResult.placed?.length>0&&<Table size="small" rowKey="task_id" pagination={{pageSize:6}} dataSource={fillResult.placed} columns={[

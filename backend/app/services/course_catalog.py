@@ -49,9 +49,8 @@ def courses_for_group(db, group, semester, courses=None):
     return result
 
 
-def course_catalog_scope(db, start_date, term, allowed_groups=None, major=None, cohort=None, semester=None,
-                         start_dates_by_cohort=None):
-    """以课程库的专业、年级和上课学期确定可排班级及课程。"""
+def course_catalog_scope(db, start_date, term, allowed_groups=None, major=None, cohort=None, semester=None):
+    """按排课周期的学年、学期匹配课程；年级日历规则不参与培养学期推算。"""
     groups = db.query(ClassInfo).filter(ClassInfo.is_active.is_(True)).order_by(
         ClassInfo.grade, ClassInfo.department, ClassInfo.name).all()
     active_courses = db.query(Course).filter(Course.is_active.is_(True)).order_by(
@@ -65,8 +64,7 @@ def course_catalog_scope(db, start_date, term, allowed_groups=None, major=None, 
             continue
         if cohort and not cohort_matches(group.grade, cohort):
             continue
-        effective_start = (start_dates_by_cohort or {}).get(normalize_cohort(group.grade)) or start_date
-        current_semester = semester or program_semester(effective_start, term, group.grade)
+        current_semester = semester or program_semester(start_date, term, group.grade)
         if not current_semester or current_semester > MAX_UNDERGRADUATE_SEMESTER:
             continue
         applicable = courses_for_group(db, group, current_semester, active_courses)

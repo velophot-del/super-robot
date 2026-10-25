@@ -16,6 +16,8 @@ export async function downloadDataset(dataset: DownloadDataset, planId?: number)
   const anchor = document.createElement('a');
   anchor.href = url;
   anchor.download = `${DATASET_LABELS[dataset]}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  document.body.appendChild(anchor);
   anchor.click();
+  anchor.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

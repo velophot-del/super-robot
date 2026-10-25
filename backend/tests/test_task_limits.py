@@ -42,6 +42,9 @@ class TaskLimitsTests(unittest.IsolatedAsyncioTestCase):
         denied=await self.client.put(url,headers=await self.headers('teacher'),json={'revision':3,'teacher_count':2,'max_students':45})
         self.assertEqual(denied.status_code,403)
         self.assertEqual((await self.client.post(f'/api/planning/plans/{pid}/open',headers=h)).status_code,200)
+        opened=await self.client.put(url,headers=h,json={'revision':3,'teacher_count':1,'max_students':40})
+        self.assertEqual(opened.status_code,200,opened.text)
+        self.assertEqual(opened.json()['task']['max_students'],40)
         self.assertEqual((await self.client.put(url,headers=h,json={'revision':3,'teacher_count':1,'max_students':40})).status_code,409)
 
     async def test_draft_room_save_clear_and_capacity_failure_are_atomic(self):
@@ -60,6 +63,26 @@ class TaskLimitsTests(unittest.IsolatedAsyncioTestCase):
         cleared=await self.client.put(url,headers=h,json={'revision':3,'teacher_count':1,'max_students':30,'room_id':None})
         self.assertEqual(cleared.status_code,200,cleared.text)
         self.assertIsNone(cleared.json()['task']['room_address'])
+
+    async def test_matched_cycle_can_adjust_only_room_and_periods_before_publication(self):
+        pid,h,task=await self.create_task()
+        plan=self.db.get(AcademicPlan,pid)
+        plan.state='matched'
+        row=self.db.get(TeachingTask,task['id'])
+        row.payload={**row.payload,'max_students':30}
+        self.db.commit()
+        revision=plan.revision
+        url=f"/api/planning/plans/{pid}/tasks/{task['id']}/limits"
+        saved=await self.client.put(url,headers=h,json={'revision':revision,'teacher_count':1,
+            'max_students':30,'room_id':None,'slots':[
+                {'day':2,'start':1,'count':4,'phase':'normal'},
+                {'day':2,'start':1,'count':4,'phase':'tail'}]})
+        self.assertEqual(saved.status_code,200,saved.text)
+        self.assertEqual(saved.json()['task']['slots'][0]['day'],2)
+        self.assertEqual(saved.json()['revision'],revision)
+        denied=await self.client.put(url,headers=h,json={'revision':revision,'teacher_count':1,
+            'max_students':35,'room_id':None,'slots':[]})
+        self.assertEqual(denied.status_code,409)
 
     async def test_actual_students_are_entered_after_scheduling_not_taken_from_roster(self):
         pid,h,task=await self.create_task()

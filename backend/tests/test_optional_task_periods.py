@@ -10,10 +10,10 @@ class OptionalTaskPeriodsTests(unittest.IsolatedAsyncioTestCase):
     plan=test_planning_workflow.PlanningWorkflowTests.plan
     task=test_planning_workflow.PlanningWorkflowTests.task
 
-    async def test_no_periods_can_save_open_submit_match_and_publish(self):
+    async def test_periods_can_remain_empty_until_publish_but_must_be_completed_before(self):
         pid=await self.plan();admin=await self.headers();teacher=await self.headers('teacher')
         payload=self.task();payload.pop('slots');payload.pop('room_id')
-        payload['tail_weeks']=1
+        payload['tail_weeks']=1;payload['max_students']=30
         created=await self.client.post(f'/api/planning/plans/{pid}/tasks',headers=admin,json=payload)
         self.assertEqual(created.status_code,200,created.text)
         tid=created.json()['id'];self.assertEqual(created.json()['slots'],[])
@@ -30,11 +30,19 @@ class OptionalTaskPeriodsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(matched.json()['auto_assigned'],1)
         room=await self.client.put(f'/api/planning/plans/{pid}/tasks/{tid}/room',headers=admin,json={'room_id':31})
         self.assertEqual(room.status_code,200,room.text)
+        blocked=await self.client.post(f'/api/planning/plans/{pid}/publish',headers=admin)
+        self.assertEqual(blocked.status_code,409,blocked.text)
+        revision=(await self.client.get(f'/api/planning/plans/{pid}',headers=admin)).json()['revision']
+        scheduled=await self.client.put(f'/api/planning/plans/{pid}/tasks/{tid}/limits',headers=admin,json={
+            'revision':revision,'teacher_count':1,'max_students':30,'room_id':31,
+            'slots':[{'day':1,'start':1,'count':4,'phase':'normal'},
+                     {'day':1,'start':1,'count':4,'phase':'tail'}]})
+        self.assertEqual(scheduled.status_code,200,scheduled.text)
         published=await self.client.post(f'/api/planning/plans/{pid}/publish',headers=admin)
         self.assertEqual(published.status_code,200,published.text)
         state=(await self.client.get(f'/api/planning/plans/{pid}',headers=admin)).json()
         self.assertEqual(state['state'],'published')
-        self.assertEqual(state['tasks'][0]['slots'],[])
+        self.assertEqual(len(state['tasks'][0]['slots']),2)
 
     async def test_edit_omitting_hidden_fields_preserves_existing_mode_and_periods(self):
         pid=await self.plan();h=await self.headers()

@@ -82,16 +82,15 @@ class CohortCalendarRuleTests(unittest.IsolatedAsyncioTestCase):
         })
         self.assertEqual(response.status_code, 409, response.text)
 
-    async def test_course_pool_uses_grade_start_date_for_curriculum_semester(self):
+    async def test_course_pool_uses_cycle_academic_year_for_curriculum_semester(self):
         self.db.add(ClassInfo(name='视传2401', grade='2024级', department='Design', student_count=30))
-        self.db.add(Course(name='高级课程', course_code='C7', credits=2, total_hours=32, semester=7,
+        self.db.add(Course(name='当前周期课程', course_code='C5', credits=2, total_hours=32, semester=5,
             cohort='2024', department='Design', teaching_weeks=8))
         self.db.commit()
-        scope = course_catalog_scope(self.db, date(2027, 2, 1), 1,
-            start_dates_by_cohort={'2024': date(2027, 9, 6)})
+        scope = course_catalog_scope(self.db, date(2027, 2, 1), 1)
         self.assertEqual(len(scope), 1)
-        self.assertEqual(scope[0]['semester'], 7)
-        self.assertEqual([course.course_code for course in scope[0]['courses']], ['C7'])
+        self.assertEqual(scope[0]['semester'], 5)
+        self.assertEqual([course.course_code for course in scope[0]['courses']], ['C5'])
 
     async def test_published_teacher_conflicts_follow_frozen_grade_dates(self):
         rule = CohortCalendarRule(cohort='2026', weeks=18, start_date=date(2026, 9, 14), exam_weeks=[])

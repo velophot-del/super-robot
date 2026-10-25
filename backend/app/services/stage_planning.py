@@ -56,8 +56,8 @@ def students_overlap(a, b):
 def validate_tasks(db, plan, tasks, check_slots=True):
     """校验任务可发布性。
 
-    `check_slots=False` 用于发布阶段：周内节次为可选项，仅校验周段、教学组周上限、
-    学生人数与地点容量；节次相关的学时、同日冲突和教室节次占用不再校验。
+    `check_slots=False` 仅用于不需要验证周内节次的预检；正式发布必须校验完整节次、
+    计划学时、同日冲突和教室节次占用。
     """
     group_weeks = defaultdict(set)
     room_slots = set()

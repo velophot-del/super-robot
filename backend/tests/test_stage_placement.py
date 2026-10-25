@@ -150,15 +150,84 @@ class StagePlacementTests(unittest.IsolatedAsyncioTestCase):
         response=await self.client.post('/api/planning/plans/71/auto-fill/ai',headers=h,json={'revision':1})
         self.assertEqual(response.status_code,200,response.text)
         body=response.json()
-        self.assertEqual(body['filled'],2)
+        self.assertEqual(body['filled'],1)
         self.assertEqual(body['source'],'rules')
         tasks=self.db.query(TeachingTask).filter_by(plan_id=71).all()
-        self.assertEqual(len(tasks),3)
+        self.assertEqual(len(tasks),2)
         self.assertEqual(self.db.get(TeachingTask,710).payload['start_week'],1)
         generated=[task.payload for task in tasks if task.id!=710]
-        self.assertEqual({task['start_week'] for task in generated},{1,5})
+        self.assertEqual({task['start_week'] for task in generated},{5})
+        self.assertEqual(body['unplaced'][0]['reason'],'剩余周段不足（受考试周、周期长度或同教学组课程不得并行限制）')
         self.assertTrue(all(task['end_week']<4 or task['start_week']>4 for task in generated))
         self.assertTrue(all(not task.get('slots') for task in generated))
+
+    async def test_ai_autofill_assigns_periods_and_room_from_course_and_class_data(self):
+        from app.models.classroom import Classroom
+        from app.models.planning import TeachingTask
+        h={'Authorization':'Bearer '+(await self.client.post('/api/debug/session',json={'role':'admin'})).json()['access_token']}
+        self.db.add(ClassInfo(name='B',grade='2026',department='Design',student_count=28))
+        self.db.add(Classroom(id=91,name='Room 91',room_code='R91',capacity=30,is_available=True))
+        self.db.add(Course(name='Course period',course_code='CP',credits=2,total_hours=24,semester=1,
+            cohort='2026',department='Design',teaching_weeks=4,weekdays=[2]))
+        self.db.add(AcademicPlan(id=75,name='Period autofill',start_date=date(2026,9,6),weeks=8,
+            deadline=datetime(2027,8,1),state='draft',revision=1,
+            settings={'groups':['B'],'semester':1,'major':'Design','cohort':'2026','exam_weeks':{'*':[]}}))
+        self.db.commit()
+
+        response=await self.client.post('/api/planning/plans/75/auto-fill/ai',headers=h,json={'revision':1})
+
+        self.assertEqual(response.status_code,200,response.text)
+        task=self.db.query(TeachingTask).filter_by(plan_id=75).one()
+        self.assertEqual(task.payload['slots'],[{'day':2,'start':1,'count':6,'phase':'normal'}])
+        from app.models.planning import PeriodSlot
+        slot=self.db.query(PeriodSlot).filter_by(task_id=task.id).one()
+        self.assertEqual((slot.day,slot.start,slot.count),(2,1,6))
+        self.assertEqual(task.payload['room_id'],91)
+
+    async def test_ai_autofill_keeps_opening_possible_without_available_room(self):
+        from app.models.planning import TeachingTask
+        h={'Authorization':'Bearer '+(await self.client.post('/api/debug/session',json={'role':'admin'})).json()['access_token']}
+        self.db.add(ClassInfo(name='C',grade='2026',department='Design',student_count=35))
+        self.db.add(Course(name='Course no room',course_code='NR',credits=2,total_hours=24,semester=1,
+            cohort='2026',department='Design',teaching_weeks=4,weekdays=[2]))
+        self.db.add(AcademicPlan(id=76,name='Optional room',start_date=date(2026,9,6),weeks=8,
+            deadline=datetime(2027,8,1),state='draft',revision=1,
+            settings={'groups':['C'],'semester':1,'major':'Design','cohort':'2026','exam_weeks':{'*':[]}}))
+        self.db.commit()
+
+        response=await self.client.post('/api/planning/plans/76/auto-fill/ai',headers=h,json={'revision':1})
+
+        self.assertEqual(response.status_code,200,response.text)
+        task=self.db.query(TeachingTask).filter_by(plan_id=76).one()
+        self.assertTrue(task.payload['slots'])
+        self.assertIsNone(task.payload['room_id'])
+        opened=await self.client.post('/api/planning/plans/76/open',headers=h)
+        self.assertEqual(opened.status_code,200,opened.text)
+        task_id=task.id
+        edited=await self.client.put(f'/api/planning/plans/76/tasks/{task_id}/limits',headers=h,json={
+            'revision':2,'teacher_count':1,'max_students':35,'room_id':None})
+        self.assertEqual(edited.status_code,200,edited.text)
+
+    async def test_ai_autofill_places_courses_sequentially_within_each_group(self):
+        from app.models.planning import TeachingTask
+        h={'Authorization':'Bearer '+(await self.client.post('/api/debug/session',json={'role':'admin'})).json()['access_token']}
+        self.db.add(ClassInfo(name='G',grade='2026',department='Design',student_count=30))
+        self.db.add_all([
+            Course(name='Course A',course_code='A',credits=2,total_hours=24,semester=1,cohort='2026',department='Design',teaching_weeks=3),
+            Course(name='Course B',course_code='B',credits=2,total_hours=24,semester=1,cohort='2026',department='Design',teaching_weeks=3),
+        ])
+        self.db.add(AcademicPlan(id=73,name='Sequential AI fill',start_date=date(2026,9,6),weeks=6,
+            deadline=datetime(2027,8,1),state='draft',revision=1,
+            settings={'groups':['G'],'semester':1,'major':'Design','cohort':'2026','exam_weeks':{'*':[]}}))
+        self.db.commit()
+
+        response=await self.client.post('/api/planning/plans/73/auto-fill/ai',headers=h,json={'revision':1})
+
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual(response.json()['filled'],2)
+        generated=sorted(response.json()['placed'],key=lambda task:task['start_week'])
+        self.assertEqual([(task['start_week'],task['end_week']) for task in generated],[(1,3),(4,6)])
+        self.assertEqual(len(self.db.query(TeachingTask).filter_by(plan_id=73).all()),2)
 
     async def test_ai_autofill_reports_courses_without_weeks(self):
         h={'Authorization':'Bearer '+(await self.client.post('/api/debug/session',json={'role':'admin'})).json()['access_token']}

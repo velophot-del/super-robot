@@ -157,6 +157,14 @@ class PlanningWorkflowTests(unittest.IsolatedAsyncioTestCase):
         response=await self.client.post(f'/api/planning/plans/{pid}/open',headers=admin)
         self.assertEqual(response.status_code,200,response.text)
 
+        revision=(await self.client.get(f'/api/planning/plans/{pid}',headers=admin)).json()['revision']
+        scheduled=await self.client.put(
+            f'/api/planning/plans/{pid}/tasks/{task_id}/limits',headers=admin,
+            json={'revision':revision,'teacher_count':1,'max_students':30,'room_id':None,
+                  'slots':[{'day':2,'start':1,'count':4,'phase':'normal'}]})
+        self.assertEqual(scheduled.status_code,200,scheduled.text)
+        self.assertEqual(scheduled.json()['task']['slots'][0]['day'],2)
+
         assigned=await self.client.put(
             f'/api/planning/plans/{pid}/tasks/{task_id}/room',headers=admin,json={'room_id':31})
         self.assertEqual(assigned.status_code,200,assigned.text)

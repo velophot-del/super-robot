@@ -12,7 +12,7 @@ from app.services.authorization import check
 from app.services.stage_planning import task_dict,validate_tasks,validate_student_limit
 from app.services.academic_scope import is_global, plan_term, groups_for_cycle
 from app.services.course_catalog import course_catalog_scope, course_pool_rows
-from app.services.cohort_calendar import cohort_weeks, cohort_exam_weeks, cohort_start_dates
+from app.services.cohort_calendar import cohort_weeks, cohort_exam_weeks
 from app.services.exam_weeks import exam_weeks_for
 from app.api.planning import write,get_plan,tasks_for,event
 
@@ -50,12 +50,11 @@ class AiCourseAutofillInput(BaseModel):
 
 def pool_rows(db,plan):
     settings=plan.settings or {}
-    start_dates=cohort_start_dates(db,plan)
     if is_global(plan):
-        scope=course_catalog_scope(db,plan.start_date,plan_term(plan),settings.get('groups') or None,start_dates_by_cohort=start_dates)
+        scope=course_catalog_scope(db,plan.start_date,plan_term(plan),settings.get('groups') or None)
     else:
         scope=course_catalog_scope(db,plan.start_date,plan_term(plan),settings.get('groups') or None,
-            settings.get('major'),settings.get('cohort'),settings.get('semester'),start_dates_by_cohort=start_dates)
+            settings.get('major'),settings.get('cohort'),settings.get('semester'))
     return [],course_pool_rows(scope)
 
 
@@ -153,7 +152,7 @@ def update_groups(plan_id:int,data:GroupsInput,user=Depends(require_user),db:Ses
         if not groups or any(len(g)>100 for g in groups):raise HTTPException(422,'请填写有效班级名称')
         eligible=None
         if is_global(plan):
-            eligible=set(groups_for_cycle(db,plan.start_date,plan_term(plan),cohort_start_dates(db,plan)))
+            eligible=set(groups_for_cycle(db,plan.start_date,plan_term(plan)))
             known={row.name for row in db.query(ClassInfo).filter(ClassInfo.is_active.is_(True))}
             if any(group in known and group not in eligible for group in groups):
                 raise HTTPException(422,'当前周期不能加入已毕业或未纳入培养方案的班级')

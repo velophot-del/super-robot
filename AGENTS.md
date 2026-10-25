@@ -3,7 +3,7 @@
 - Use Chinese for user communication; preserve English code and file names.
 - Stack: FastAPI + SQLAlchemy backend, React + TypeScript + Ant Design frontend.
 - Keep changes focused. Do not install new dependencies or submit/push code without user approval.
-- Preserve existing data and user edits. This directory currently has no Git metadata.
+- Preserve existing data and user edits.
 
 ## Local development
 
@@ -21,6 +21,11 @@
 ## Checks
 
 - Administrator-managed Teacher.position (主任 or 副主任) and review_major contribute scoped lead@dept access for the bound teacher account; demotion removes only appointment-derived access. Never derive review scope from self-declared profiles or create/claim accounts when editing appointments.
+- New-cycle UI enables department_review. Initial review is per immutable submission/task, scoped by administrator-controlled Teacher.offering_unit_id with self-recusal; store decisions and recommendations in append-only PlanningEvent. Department approval/recommendation never reserves a teaching place. College administrators may directly assign any course; department directors may directly assign only in-scope courses with zero latest submissions, while claimed courses keep initial review → director proposal → administrator confirmation. Director direct assignments use source=department_director, preserve scope/self-recusal/capacity checks, cannot overwrite administrator allocations, and never grant publish rights. Preserve legacy cycles until explicitly enabled; enabling retains prior assignment suggestions but releases their locks. Match, manual assignment and publication must recheck current approval; cross-cycle conflicts include matched as well as published plans.
+- Department AI review is read-only and scoped to reviewable teachers' latest submissions in the same academic term. Reuse deterministic matching/constraint evidence, distinguish prospective conflicts from final assignments, and mark missing profile/period data unknown. Never send names, work numbers, contacts or self-profile prose to the model; use local teacher aliases. External department occupancy may yield anonymous conflict counts/messages only. Recheck the analysis fingerprint after model calls and never let model advice approve or allocate courses.
+- Review dialogs load teachers and rooms through task-scoped review-options, not administrator CRUD endpoints. Keep teacher choices scoped to current submissions and reviewer authority, expose minimal fields, preserve management-route denials, and disable saving on loading/errors or explicit server-side operation restrictions.
+- Word major exports must work at any cycle state: use the immutable PublishedPlan snapshot when published, otherwise current TeachingTask data; include draft/open/matched cycles and blank cycles with no tasks. Do not filter export tasks by the caller's teaching/review scope. Handle unplaced tasks (omit from the week grid and list them as待安排) and emit a header-only blank template for empty cycles. Explicit blank=true exports require no saved cycle and never create database records. Data downloads default to the latest cycle, preserving a published snapshot only for the selected published cycle.
+- The administrator data-download center lists all cycles, not only published ones. Schedule download prefers a published snapshot, then current draft/open/matched tasks, then legacy ScheduleEntry data; empty data must return a downloadable workbook with headers, never 404. Append the temporary anchor to document.body before clicking so browsers actually save the file.
 
 From `backend`:
 

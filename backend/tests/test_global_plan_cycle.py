@@ -1,7 +1,8 @@
 import unittest
 import test_debug_mode
+from datetime import date
 from app.models.class_info import ClassInfo
-from app.models.planning import AcademicPlan, TeachingTask
+from app.models.planning import AcademicPlan, CohortCalendarRule, TeachingTask
 from app.models.course import Course
 from app.services.academic_scope import cohort_matches, department_matches, grade_label, program_semester
 
@@ -110,6 +111,53 @@ class GlobalPlanCycleTests(unittest.IsolatedAsyncioTestCase):
         override_state = (await self.client.get(
             f"/api/planning/plans/{overridden.json()['id']}", headers=headers)).json()
         self.assertEqual([(task['name'], task['program_semester']) for task in override_state['tasks']], [('第一学期课程', 1)])
+
+    async def test_august_2027_cycle_catalog_and_ai_use_cycle_date_despite_old_calendar_dates(self):
+        headers = {'Authorization': 'Bearer ' + (
+            await self.client.post('/api/debug/session', json={'role': 'admin'})).json()['access_token']}
+        self.db.add_all([
+            ClassInfo(name='视传2601', grade='2026', department='视觉传达设计', student_count=30),
+            ClassInfo(name='视传2301', grade='2023', department='视觉传达设计', student_count=30),
+            CohortCalendarRule(cohort='2026', weeks=20, start_date=date(2026, 8, 31), exam_weeks=[20]),
+            CohortCalendarRule(cohort='2023', weeks=20, start_date=date(2023, 8, 28), exam_weeks=[20]),
+            Course(name='第一学期课程', course_code='D1', credits=2, total_hours=32, semester=1,
+                   cohort='2026', department='视觉传达设计', teaching_weeks=4),
+            Course(name='第三学期课程', course_code='D3', credits=2, total_hours=32, semester=3,
+                   cohort='2026', department='视觉传达设计', teaching_weeks=4),
+        ])
+        self.db.commit()
+
+        created = await self.client.post('/api/planning/plans', headers=headers, json={
+            'name': '2027-2028-1学期', 'start_date': '2027-08-30', 'weeks': 20,
+            'deadline': '2027-08-20T23:59:59', 'global_cycle': True, 'term': 1,
+            'rule_confirmed': True})
+        self.assertEqual(created.status_code, 200, created.text)
+        plan = created.json()
+        self.assertEqual(plan['groups'], ['视传2601'])
+
+        pool = await self.client.get(f"/api/planning/plans/{plan['id']}/course-pool", headers=headers)
+        self.assertEqual(pool.status_code, 200, pool.text)
+        self.assertEqual([(course['name'], course['semester']) for course in pool.json()['courses']], [('第三学期课程', 3)])
+
+        state = (await self.client.get(f"/api/planning/plans/{plan['id']}", headers=headers)).json()
+        filled = await self.client.post(f"/api/planning/plans/{plan['id']}/auto-fill/ai", headers=headers,
+            json={'revision': state['revision']})
+        self.assertEqual(filled.status_code, 200, filled.text)
+        self.assertEqual([(task['course'], task['semester']) for task in filled.json()['placed']], [('第三学期课程', 3)])
+        state = (await self.client.get(f"/api/planning/plans/{plan['id']}", headers=headers)).json()
+        self.assertEqual([(task['name'], task['program_semester']) for task in state['tasks']], [('第三学期课程', 3)])
+
+        generated_plan = await self.client.post('/api/planning/plans', headers=headers, json={
+            'name': '2027-2028-1学期生成验证', 'start_date': '2027-08-30', 'weeks': 20,
+            'deadline': '2027-08-20T23:59:59', 'global_cycle': True, 'term': 1,
+            'rule_confirmed': True})
+        self.assertEqual(generated_plan.status_code, 200, generated_plan.text)
+        generated = await self.client.post(
+            f"/api/planning/plans/{generated_plan.json()['id']}/generate", headers=headers)
+        self.assertEqual(generated.status_code, 200, generated.text)
+        generated_state = (await self.client.get(
+            f"/api/planning/plans/{generated_plan.json()['id']}", headers=headers)).json()
+        self.assertEqual([(task['name'], task['program_semester']) for task in generated_state['tasks']], [('第三学期课程', 3)])
 
     async def test_course_pool_excludes_graduated_grade_past_curriculum_end(self):
         self.assertTrue(cohort_matches('2021级', '21'))

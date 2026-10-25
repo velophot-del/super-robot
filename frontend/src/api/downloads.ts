@@ -4,7 +4,7 @@ export type DownloadDataset = 'classes' | 'teachers' | 'courses' | 'classrooms' 
 
 export interface DownloadOptions {
   datasets: { key: DownloadDataset; label: string }[];
-  plans: { id: number; name: string }[];
+  plans: { id: number; name: string; state?: string }[];
   legacy_schedule?: string | null;
 }
 

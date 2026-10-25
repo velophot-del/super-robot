@@ -17,7 +17,7 @@ import HelpTip from '../components/HelpTip';
 import ProfessionalExport from '../components/ProfessionalExport';
 
 const statusNames:Record<string,string>={open:'开放选课',matched:'匹配审核中',published:'已发布'};
-const editable=(p:any)=>p.state==='open'&&new Date(p.deadline).getTime()>Date.now();
+const editable=(p:any)=>(p.state==='open'&&new Date(p.deadline).getTime()>Date.now())||p.can_resubmit;
 
 export default function TeacherSelectionPage(){
   const {user}=useAuth();
@@ -95,6 +95,7 @@ export default function TeacherSelectionPage(){
   };
   const periodTitle=(plan:any)=><Space wrap><Typography.Text strong>{plan.global_cycle?'全学院 · 所有年级与专业':`${plan.major||'未注明专业'}${plan.cohort?` · ${gradeLabel(plan.cohort)}`:''}`} · {plan.academic_term===1?'第一':'第二'}学期</Typography.Text><Tag color={editable(plan)?'green':'default'}>{statusNames[plan.state]||plan.state}{plan.state==='open'&&!editable(plan)?'（已截止）':''}</Tag></Space>;
   const basket=(plan:any)=><div>
+    {(plan.submission?.reviews||[]).filter((r:any)=>r.status==='returned').map((r:any)=><Alert key={r.task_id} type="warning" showIcon title={`${plan.tasks.find((t:any)=>t.id===r.task_id)?.name||'课程申请'}已退回`} description={r.reason} style={{marginBottom:8}}/>)}
     <Typography.Title level={5}>已选课程</Typography.Title>
     {plan.draft.task_ids.length?plan.draft.task_ids.map((taskId:number)=>{
       const task=plan.tasks.find((t:any)=>t.id===taskId);

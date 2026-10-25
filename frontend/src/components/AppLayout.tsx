@@ -35,6 +35,7 @@ const dataMenu = [
       { key: '/data/check', icon: <ScheduleOutlined />, label: '数据检查' },
       { key: '/data/cycle-rules', icon: <ScheduleOutlined />, label: '开课周期与规则' },
       { key: '/data/programs-grades', icon: <TeamOutlined />, label: '专业方向与教研室管理' },
+      { key: '/data/download', icon: <DownloadOutlined />, label: '数据下载' },
     ],
   },
 ];

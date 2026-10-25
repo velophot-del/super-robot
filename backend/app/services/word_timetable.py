@@ -65,17 +65,20 @@ def cell(lines,width,prototype,span=1,vertical=None,size=18):
 def stage_runs(tasks,weeks,exam_weeks=None):
     """Merge only adjacent weeks whose displayed teaching content is identical."""
     exam=set(exam_weeks) if exam_weeks is not None else {weeks}
+    # Process drafts may contain tasks whose weeks have not been placed yet.
+    placed=[task for task in tasks if task.get('start_week') and task.get('end_week')]
     content=[]
     for week in range(1,weeks+1):
         lines=[]
-        for task in sorted(tasks,key=lambda t:(t['name'],t.get('id',0))):
+        for task in sorted(placed,key=lambda t:(t.get('name') or '',t.get('id',0))):
             if not task['start_week']<=week<=task['end_week']:continue
             phase='tail' if task.get('tail_weeks',0) and week>task['end_week']-task['tail_weeks'] else 'normal'
-            slots=[s for s in task['slots'] if s.get('phase','normal')==phase]
-            lines.extend([task['name'], '、'.join(task.get('teacher_names',[])) or '教师待分配',
+            slots=[s for s in (task.get('slots') or []) if s.get('phase','normal')==phase]
+            lines.extend([task.get('name') or '未命名课程',
+                '、'.join(task.get('teacher_names') or []) or '教师待分配',
                 '【'+(task.get('room_name') or '地点待落实')+'】',
-                '；'.join(f"{DAYS[s['day']-1]}{s['start']}—{s['start']+s['count']-1}节" for s in slots),
-                f"{task.get('credits',0):g}学分 / {task.get('required_hours',0)}学时"])
+                '；'.join(f"{DAYS[s.get('day',1)-1]}{s.get('start',1)}—{s.get('start',1)+s.get('count',1)-1}节" for s in slots),
+                f"{task.get('credits') or 0}学分 / {task.get('required_hours') or 0}学时"])
         if not lines:lines=['考试'] if week in exam else ['']
         content.append(tuple(lines))
     runs=[]
@@ -113,6 +116,7 @@ def build_word_timetable(batches,major,prepared_on=None):
         for task in batch['tasks']:
             cohort=task.get('cohort') or p.get('cohort') or '未设置年级'
             by_cohort[cohort].append(task)
+        if not by_cohort:by_cohort[p.get('cohort') or '未设置年级']=[]
         for cohort,tasks in by_cohort.items():
             rule=calendar_rules.get(str(cohort).removesuffix('级').removesuffix('届')) or {}
             key=(cohort,rule.get('start_date') or p['start_date'],min(int(rule.get('weeks') or p['weeks']),int(p['weeks'])),p.get('semester',1))
@@ -123,7 +127,7 @@ def build_word_timetable(batches,major,prepared_on=None):
         widths=left+[total//weeks+(1 if w<total%weeks else 0) for w in range(weeks)]
         tasks=[t for b in group for t in b['tasks']]
         by_group=defaultdict(list)
-        for task in tasks:by_group[task['group']].append(task)
+        for task in tasks:by_group[task.get('group') or '未设置教学组'].append(task)
         # Pack rows conservatively. Word can repeat the two header rows on overflow.
         pages=[];page=[];used=0
         for label,items in sorted(by_group.items()):
@@ -137,6 +141,8 @@ def build_word_timetable(batches,major,prepared_on=None):
             if page and (len(page)>=5 or used+estimated>350):pages.append(page);page=[];used=0
             page.append((label,items,runs));used+=estimated
         if page:pages.append(page)
+        # A blank process draft still needs one page with the template header.
+        if not pages:pages=[[]]
         for rows in pages:
             if page_index:
                 p=element('p');r=element('r');r.append(element('br',type='page'));p.append(r);body.append(p)
@@ -164,11 +170,19 @@ def build_word_timetable(batches,major,prepared_on=None):
                 row=element('tr');rp=element('trPr');rp.append(element('trHeight',val=1200,hRule='atLeast'));row.append(rp)
                 for index,text in enumerate([college,major]):
                     row.append(cell([text] if row_index==0 else [''],widths[index],source_cells[index],vertical=('restart' if row_index==0 else 'continue') if len(rows)>1 else None))
-                count=max((t.get('student_count',0) for t in items),default=0)
+                count=max((int(t.get('student_count') or 0) for t in items),default=0)
                 row.append(cell([label]+([f'【{count}人】'] if count else []),left[2],source_cells[2]))
                 for a,b,lines in runs:row.append(cell(lines,sum(widths[3+a:3+b]),source_cells[3],span=b-a,size=16))
                 table.append(row)
             body.append(table)
+            unplaced=[task for task in tasks
+                      if not task.get('start_week') or not task.get('end_week')]
+            if unplaced:
+                names='、'.join((task.get('name') or '未命名课程') for task in unplaced[:12])
+                more=f' 等{len(unplaced)}门' if len(unplaced)>12 else ''
+                body.append(paragraph(f'待安排周段：{names}{more}',size=16))
+            if not tasks:
+                body.append(paragraph('暂无课程任务（空白稿）',size=16))
             body.append(paragraph('注：格内课程按阶段周段合并；同周两门上下排列，各自注明教师、地点和时段。考试周按年级设置。',size=16))
     body.append(section)
     package['word/document.xml']=ET.tostring(root,encoding='utf-8',xml_declaration=True)
