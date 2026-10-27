@@ -1,7 +1,7 @@
 // 主布局组件 - 侧边导航 + 内容区
 import { useState } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { Layout, Menu, Button, Typography, Dropdown, Avatar, Space, message } from 'antd';
+import { Layout, Menu, Button, Typography, Dropdown, Avatar, Space, Drawer, Grid, message } from 'antd';
 import {
   TeamOutlined,
   UserOutlined,
@@ -42,6 +42,10 @@ const dataMenu = [
 
 export default function AppLayout() {
   const [collapsed, setCollapsed] = useState(true);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const screens = Grid.useBreakpoint();
+  const mobile = !screens.md;
+  const navCollapsed = !mobile && collapsed;
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout } = useAuth();
@@ -73,36 +77,22 @@ export default function AppLayout() {
     .filter((item) => item.children?.some((child) => selectedKey.startsWith(child.key)))
     .map((item) => item.key);
 
-  return (
-    <Layout style={{ minHeight: '100vh' }}>
-      {/* 侧边栏 */}
-      <Sider
-        trigger={null}
-        collapsible
-        collapsed={collapsed}
-        width={216}
-        style={{
-          background: '#ffffff',
-          borderRight: '1px solid #e6e8ec',
-          display: 'flex',
-          flexDirection: 'column',
-        }}
-      >
+  const navigation = <>
         {/* Logo */}
         <div
           style={{
             height: 56,
             display: 'flex',
             alignItems: 'center',
-            justifyContent: collapsed ? 'center' : 'flex-start',
-            padding: collapsed ? 0 : '0 20px',
+            justifyContent: navCollapsed ? 'center' : 'flex-start',
+            padding: navCollapsed ? 0 : '0 20px',
             borderBottom: '1px solid #e6e8ec',
           }}
         >
           <ThunderboltOutlined
-            style={{ fontSize: 24, color: '#c26345', marginRight: collapsed ? 0 : 10 }}
+            style={{ fontSize: 24, color: '#c26345', marginRight: navCollapsed ? 0 : 10 }}
           />
-          {!collapsed && (
+          {!navCollapsed && (
             <Text
               strong
               style={{
@@ -122,7 +112,7 @@ export default function AppLayout() {
           mode="inline"
           selectedKeys={[selectedKey]}
           defaultOpenKeys={openKeys}
-          onClick={({ key }) => navigate(key)}
+          onClick={({ key }) => { navigate(key); setMobileOpen(false); }}
           items={requiresAccountSetup(user) ? visibleMenuItems.filter(item => item.key === '/profile') : visibleMenuItems}
           style={{
             background: 'transparent',
@@ -140,14 +130,22 @@ export default function AppLayout() {
               icon={<SettingOutlined />}
               title="AI 设置"
               aria-label="AI 设置"
-              onClick={() => navigate('/settings/ai')}
-              style={{ justifyContent: collapsed ? 'center' : 'flex-start', color: '#533afd' }}
+              onClick={() => { navigate('/settings/ai'); setMobileOpen(false); }}
+              style={{ justifyContent: navCollapsed ? 'center' : 'flex-start', color: '#533afd' }}
             >
-              {!collapsed && 'AI 设置'}
+              {!navCollapsed && 'AI 设置'}
             </Button>
           </div>
         )}
-      </Sider>
+  </>;
+
+  return (
+    <Layout style={{ minHeight: '100vh' }}>
+      {mobile ? <Drawer title="导航" placement="left" size={260} open={mobileOpen} onClose={() => setMobileOpen(false)} styles={{ body: { padding: 0 } }}>
+        {navigation}
+      </Drawer> : <Sider trigger={null} collapsible collapsed={collapsed} width={216} style={{ background: '#ffffff', borderRight: '1px solid #e6e8ec' }}>
+        {navigation}
+      </Sider>}
 
       {/* 主内容区 */}
       <Layout>
@@ -165,9 +163,9 @@ export default function AppLayout() {
         >
           <Space size={14}><Button
             type="text"
-            aria-label={collapsed?'展开导航':'收起导航'}
-            icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-            onClick={() => setCollapsed(!collapsed)}
+            aria-label={mobile ? '打开导航' : collapsed ? '展开导航' : '收起导航'}
+            icon={mobile || collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+            onClick={() => mobile ? setMobileOpen(true) : setCollapsed(!collapsed)}
           /><div><Text strong style={{fontSize:16}}>视觉传达设计学院</Text><div style={{fontSize:12,color:'#7c838e',lineHeight:'18px'}}>课程教学管理</div></div></Space>
           <Space size={16}>
             <Text className="header-context" type="secondary" style={{ fontSize: 13 }}>

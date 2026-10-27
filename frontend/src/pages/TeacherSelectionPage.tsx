@@ -165,7 +165,7 @@ export default function TeacherSelectionPage(){
     {error&&<Alert showIcon type="error" title={error}/>}
     {gridLoading?<Spin/>:!currentPlans.length?<Empty description="暂无符合筛选条件的开放选课周期，请等待管理员开放"/>:<Space orientation="vertical" style={{width:'100%'}} size="large">{pool}</Space>}
     {!selectionActive&&<ConfirmedWorkloadPanel plans={allPlans} refreshKey={refresh}/>}
-    <Drawer title="课程详情与预选" open={Boolean(detail)} onClose={()=>setDetail(undefined)} width={520}>
+    <Drawer title="课程详情与预选" open={Boolean(detail)} onClose={()=>setDetail(undefined)} width="min(520px, 100vw)">
       {detail&&activePlan&&<Space orientation="vertical" size="large" style={{width:'100%'}}>
         <Typography.Title level={4}>{detail.task.name}</Typography.Title>
         <Descriptions column={1} bordered items={[
